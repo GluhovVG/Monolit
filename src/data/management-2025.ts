@@ -25,7 +25,7 @@ export type AccountingDeal = {
   weightKg: number | null;
   blockCosts: BlockCosts;
   fines: number | null;
-  status: 'На проверке';
+  status: 'Подтверждён' | 'На проверке' | 'Предварительный';
   issue: string;
 };
 
