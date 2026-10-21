@@ -419,43 +419,46 @@ function App() {
                 <span>
                   <Clock3 size={15} /> Период: <b>{period}</b>
                 </span>
-                <span>Сравнение: с предыдущим месяцем</span>
+                <span>Сравнение: нет исторических данных</span>
                 <span className="prelim-tag">Показатели демонстрационные</span>
               </div>
               <div className="kpi-grid">
                 <Kpi
                   label="Выручка"
-                  value={money(totals.revenue)}
-                  change="+8,4%"
-                  trend="up"
-                  note="к предыдущему периоду"
+                  value={periodDeals.length ? money(totals.revenue) : '—'}
+                  change="—"
+                  trend="flat"
+                  note="нет данных сравнения"
                   color="blue"
                 />
                 <Kpi
                   label="Затраты"
-                  value={money(totals.cost)}
-                  change="+3,1%"
-                  trend="up"
-                  note="к предыдущему периоду"
+                  value={periodDeals.length ? money(totals.cost) : '—'}
+                  change="—"
+                  trend="flat"
+                  note="нет данных сравнения"
                   color="orange"
                 />
                 <Kpi
                   label="Прибыль"
-                  value={money(profit)}
-                  change="+12,6%"
-                  trend="up"
-                  note="к предыдущему периоду"
+                  value={periodDeals.length ? money(profit) : '—'}
+                  change="—"
+                  trend="flat"
+                  note="нет данных сравнения"
                   color="green"
                 />
                 <Kpi
                   label="Рентабельность продаж"
-                  value={pct(margin)}
-                  change="+1,8 п.п."
-                  trend="up"
-                  note="к предыдущему периоду"
+                  value={margin === null ? '—' : pct(margin)}
+                  change="—"
+                  trend="flat"
+                  note="нет данных сравнения"
                   color="violet"
                 />
               </div>
+              {periodDeals.length === 0 && (
+                <div className="bottom-note">За этот период источники не загружены. Отсутствие данных не означает нулевой результат.</div>
+              )}
               <div className="section-head">
                 <div>
                   <h2>Результаты по блокам</h2>
@@ -527,9 +530,9 @@ function App() {
                       <h2>Приоритетные сделки</h2>
                       <p>Список для внимания администратора</p>
                     </div>
-                    <span className="counter">3 требуют внимания</span>
+                    <span className="counter">{periodDeals.filter(d => d.status !== 'Подтверждён').length} требуют внимания</span>
                   </div>
-                  {seedDeals
+                  {periodDeals
                     .filter(d => d.status !== 'Подтверждён')
                     .slice(0, 3)
                     .map((d, i) => (
@@ -577,31 +580,31 @@ function App() {
                   </div>
                   <div className="health-score">
                     <div className="score-ring">
-                      <strong>82</strong>
-                      <span>/100</span>
+                      <strong>{reportCheck.okToPublish ? 'OK' : '!'}</strong>
+                        <span>контроль</span>
                     </div>
                     <div>
-                      <strong>Есть вопросы к данным</strong>
-                      <p>Требуется проверка отдельных сделок.</p>
+                      <strong>{reportCheck.okToPublish ? 'Блокировок нет' : 'Отчёт не готов к подтверждению'}</strong>
+                       <p>Детерминированные проверки демонстрационного реестра.</p>
                     </div>
                   </div>
                   <div className="health-line">
                     <span>
-                      <i className="dot green-dot"></i> Автопроверки пройдены
+                      <i className="dot green-dot"></i> Проверено активных сделок
                     </span>
-                    <b>18</b>
+                    <b>{reportCheck.checkedDeals}</b>
                   </div>
                   <div className="health-line">
                     <span>
-                      <i className="dot amber-dot"></i> Замечания ИИ
+                      <i className="dot amber-dot"></i> Предупреждения правил
                     </span>
-                    <b>3</b>
+                    <b>{reportCheck.warnings}</b>
                   </div>
                   <div className="health-line">
                     <span>
-                      <i className="dot red-dot"></i> Критические конфликты
+                      <i className="dot red-dot"></i> Блокирующие замечания
                     </span>
-                    <b>1</b>
+                    <b>{reportCheck.blockers}</b>
                   </div>
                   <button
                     className="panel-link"
@@ -629,6 +632,12 @@ function App() {
                   <p>Реестр и финансовые результаты по блокам.</p>
                 </div>
                 <div className="heading-actions">
+                  <select value={period} onChange={e => setPeriod(e.target.value)} aria-label="Период реестра">
+                    <option>Октябрь 2026</option>
+                    <option>Сентябрь 2026</option>
+                    <option>Август 2026</option>
+                    <option>Январь — октябрь 2026</option>
+                  </select>
                   <button className="btn-secondary" onClick={exportCsv}>
                     <Download size={16} /> Экспорт Excel
                   </button>
@@ -692,7 +701,7 @@ function App() {
                         >
                           {money(d.revenue - d.cost)}
                         </td>
-                        <td>{pct(((d.revenue - d.cost) / d.revenue) * 100)}</td>
+                        <td>{d.revenue ? pct(((d.revenue - d.cost) / d.revenue) * 100) : '—'}</td>
                         <td>
                           <span
                             className={
@@ -1089,10 +1098,7 @@ function App() {
               <div>
                 <small>Рентабельность</small>
                 <strong>
-                  {pct(
-                    ((selected.revenue - selected.cost) / selected.revenue) *
-                      100
-                  )}
+                  {selected.revenue ? pct(((selected.revenue - selected.cost) / selected.revenue) * 100) : '—'}
                 </strong>
               </div>
             </div>
@@ -1155,9 +1161,9 @@ function Kpi({
         <span className={'trend ' + trend}>
           {trend === 'up' ? (
             <ArrowUpRight size={14} />
-          ) : (
+          ) : trend === 'down' ? (
             <ArrowDownRight size={14} />
-          )}{' '}
+          ) : null}{' '}
           {change}
         </span>
         <span>{note}</span>
