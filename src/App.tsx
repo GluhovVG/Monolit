@@ -1,5 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { DEFAULT_GENERAL_PARAMETERS, checkFinancialRegister, financialTotals, type GeneralParameters } from './domain/financial-controls';
+import {
+  accountingDeals, dealsForPeriod, periods, sumKnown, SOURCE_NAME, SOURCE_SHEET,
+  type AccountingDeal, type BlockName,
+} from './data/management-2025';
 const api = {
   post: async (path: string, body: unknown) => {
     const response = await fetch(path, {
@@ -38,86 +42,13 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 
-type Deal = {
-  id: string;
-  name: string;
-  block: string;
-  revenue: number;
-  cost: number;
-  plan: number;
-  status: string;
-  issue: string;
-};
+type Deal = AccountingDeal;
 const money = (n: number) =>
-  new Intl.NumberFormat('ru-RU', {
-    style: 'currency',
-    currency: 'RUB',
-    maximumFractionDigits: 0,
-  }).format(n);
+  new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(n);
 const pct = (n: number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(n) + '%';
-const seedDeals: Deal[] = [
-  {
-    id: 'MON-2401',
-    name: 'Поставка металлоконструкций — Север',
-    block: 'МК',
-    revenue: 18400000,
-    cost: 14200000,
-    plan: 16000000,
-    status: 'Подтверждён',
-    issue: 'Отклонение затрат выше плана',
-  },
-  {
-    id: 'MON-2402',
-    name: 'Комплектация объекта Восток',
-    block: 'Комплектация',
-    revenue: 12600000,
-    cost: 10100000,
-    plan: 11500000,
-    status: 'На проверке',
-    issue: 'Ожидается подтверждение ОПП',
-  },
-  {
-    id: 'MON-2403',
-    name: 'Рабочая документация — участок 3',
-    block: 'Документация',
-    revenue: 5800000,
-    cost: 2900000,
-    plan: 5200000,
-    status: 'Предварительный',
-    issue: 'Недостаточно подтверждающих строк',
-  },
-  {
-    id: 'MON-2404',
-    name: 'СМР промышленного корпуса',
-    block: 'СМР',
-    revenue: 24300000,
-    cost: 22100000,
-    plan: 23000000,
-    status: 'Подтверждён',
-    issue: 'Отклонение от бюджета',
-  },
-  {
-    id: 'MON-2405',
-    name: 'Доставка и логистика — партия 12',
-    block: 'Логистика',
-    revenue: 4200000,
-    cost: 3300000,
-    plan: 3900000,
-    status: 'На проверке',
-    issue: 'Проверить повторную строку источника',
-  },
-  {
-    id: 'MON-2406',
-    name: 'Металлоконструкции — корпус Б',
-    block: 'МК',
-    revenue: 15300000,
-    cost: 15900000,
-    plan: 14800000,
-    status: 'Предварительный',
-    issue: 'Возможный убыток, требует проверки',
-  },
-];
+const periodOptions = periods;
+
 const regulationSections = [
   {
     title: '1. Назначение и принципы',
@@ -171,26 +102,38 @@ const regulationSections = [
 
 function App() {
   const [page, setPage] = useState('dashboard');
-  const [period, setPeriod] = useState('Октябрь 2026');
+  const [period, setPeriod] = useState('2025');
   const [generalParameters, setGeneralParameters] = useState<GeneralParameters>(DEFAULT_GENERAL_PARAMETERS);
-  // Only October has seeded demo records. Missing historical periods are not zero values.
-  const periodDeals = useMemo(() => period === 'Октябрь 2026' ? seedDeals : [], [period]);
+  const periodDeals = useMemo(() => dealsForPeriod(accountingDeals, period), [period]);
   const [filter, setFilter] = useState('Все блоки');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Deal | null>(null);
-  const [aiText, setAiText] = useState(
-    'В файле за октябрь сумма по сделке MON-2402 изменилась на 8%, но обычные проверки не нашли ошибок. Проверь серьёзность изменения и рекомендуемое действие.'
-  );
+  const [aiText, setAiText] = useState('');
   const [aiResult, setAiResult] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiAvailability, setAiAvailability] = useState<'checking' | 'available' | 'unavailable'>('checking');
+  useEffect(() => {
+    if (page !== 'checks') return;
+    let active = true;
+    setAiAvailability('checking');
+    fetch('/api/health', { cache: 'no-store' })
+      .then(async response => {
+        if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('API not reachable');
+        const body = await response.json();
+        if (body?.status !== 'ok') throw new Error('API not ready');
+        if (active) setAiAvailability('available');
+      })
+      .catch(() => { if (active) setAiAvailability('unavailable'); });
+    return () => { active = false; };
+  }, [page]);
   const [notice, setNotice] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
   const deals = useMemo(
     () =>
       periodDeals.filter(
         d =>
-          (filter === 'Все блоки' || d.block === filter) &&
-          (d.name + d.id + d.block).toLowerCase().includes(search.toLowerCase())
+          (filter === 'Все блоки' || (d.blockCosts[filter as BlockName] ?? 0) > 0) &&
+          (d.name + d.id + d.customer + d.period).toLowerCase().includes(search.toLowerCase())
       ),
     [filter, search, periodDeals]
   );
@@ -199,16 +142,22 @@ function App() {
   const profit = totals.profit;
   const margin = totals.margin;
   const blocks = generalParameters.blocks
-    .filter(block => block.active && block.includeInTotals)
+    .filter(item => item.active && item.includeInTotals)
     .map(({ name }) => {
-      const ds = periodDeals.filter(d => d.block === name);
-      return {
-        name,
-        revenue: ds.reduce((sum, deal) => sum + deal.revenue, 0),
-        cost: ds.reduce((sum, deal) => sum + deal.cost, 0),
-        count: ds.length,
-      };
+      const values = periodDeals.map(deal => deal.blockCosts[name as BlockName]);
+      const amount = sumKnown(values);
+      return { name, amount: amount.sum, complete: amount.complete,
+        count: values.filter(value => value !== null && value !== 0).length };
     });
+  const previousPeriod = /^2025-(0[2-9]|1[0-2])$/.test(period)
+    ? `2025-${String(Number(period.slice(5)) - 1).padStart(2, '0')}` : null;
+  const comparisonDeals = previousPeriod ? dealsForPeriod(accountingDeals, previousPeriod) : [];
+  const comparison = comparisonDeals.length ? financialTotals(comparisonDeals, generalParameters) : null;
+  const change = (now: number, before: number | undefined) => before && Number.isFinite(before)
+    ? pct(((now - before) / Math.abs(before)) * 100) : '—';
+  const trend = (now: number, before: number | undefined) =>
+    before === undefined ? 'flat' : now > before ? 'up' : now < before ? 'down' : 'flat';
+  const comparisonLabel = comparison ? 'к предыдущему месяцу' : 'нет данных для сравнения';
   const exportCsv = () => {
     if (!deals.length) {
       setNotice('За выбранный период или фильтр нет данных для выгрузки.');
