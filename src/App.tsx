@@ -518,7 +518,7 @@ function App() {
                     </div>
                     <div>
                       <strong>{reportCheck.okToPublish ? 'Блокировок нет' : 'Отчёт не готов к подтверждению'}</strong>
-                       <p>Детерминированные проверки демонстрационного реестра.</p>
+                       <p>Автоматические проверки импортированного реестра по правилам.</p>
                     </div>
                   </div>
                   <div className="health-line">
@@ -551,7 +551,7 @@ function App() {
                 <ShieldCheck size={16} />
                 <span>
                   Подтверждённые и предварительные результаты разделяются.
-                  Данные на экране — демонстрационные, не финансовая отчётность.
+                  Данные из управленческого XLSX · показатели предварительные и требуют сверки.
                 </span>
               </div>
             </>
@@ -671,7 +671,7 @@ function App() {
                   <p>Оценка подозрительных изменений до применения данных.</p>
                 </div>
                 <span className="demo-pill">
-                  <span></span> Режим демонстрации
+                  <span></span> Импорт XLSX · на проверке
                 </span>
               </div>
               <section className="panel settings-panel">
@@ -708,6 +708,11 @@ function App() {
                   </div>
                   <span className="live-dot">AI REVIEW</span>
                 </div>
+                <p role="status">{
+                  aiAvailability === 'checking' ? 'Проверяется доступность API…'
+                    : aiAvailability === 'available' ? 'API обработчика доступен. Наличие ответа ИИ проверится только при отправке.'
+                    : 'Сервер ИИ не подключён к этому экземпляру. Текст никуда не отправляется.'
+                }</p>
                 <label htmlFor="ai-description">Описание изменения</label>
                 <textarea
                   id="ai-description"
@@ -722,7 +727,7 @@ function App() {
                   <button
                     className="btn-primary"
                     onClick={runAi}
-                    disabled={aiBusy}
+                    disabled={aiBusy || aiAvailability !== 'available'}
                   >
                     {aiBusy ? (
                       'Анализируем…'
@@ -752,25 +757,19 @@ function App() {
               <div className="section-head">
                 <div>
                   <h2>Последние замечания</h2>
-                  <p>Демонстрационный список</p>
+                  <p>Замечания по импортированным строкам</p>
                 </div>
               </div>
               <div className="issue-list">
-                <Issue
-                  level="Высокий риск"
-                  title="Возможное несоответствие ОПП"
-                  desc="MON-2402 · требуется ручная проверка соответствия."
-                />
-                <Issue
-                  level="Предупреждение"
-                  title="Необычное изменение суммы"
-                  desc="MON-2405 · сравнить с предыдущей версией файла."
-                />
-                <Issue
-                  level="Критический конфликт"
-                  title="Повторная строка источника"
-                  desc="MON-2406 · подтверждение заблокировано до устранения дубля."
-                />
+                {periodDeals.filter(deal => /отсутствует период|#DIV\/0!|не совпадает с суммой/i.test(deal.issue))
+                  .slice(0, 8).map(deal => (
+                    <Issue key={deal.id} level="Требует сверки"
+                      title={'Шифр ' + deal.id + ' · ' + deal.customer}
+                      desc={SOURCE_SHEET + '!' + deal.sourceRow + ' · ' + deal.issue} />
+                  ))}
+                {!periodDeals.some(deal => /отсутствует период|#DIV\/0!|не совпадает с суммой/i.test(deal.issue)) && (
+                  <p>В выбранном периоде не найдено структурных ошибок по импортированным показателям.</p>
+                )}
               </div>
             </>
           )}
@@ -822,17 +821,17 @@ function App() {
                               .map(s => s.title + '\r\n' + s.body)
                               .join('\r\n\r\n'),
                         ],
-                        { type: 'application/msword;charset=utf-8' }
+                        { type: 'text/plain;charset=utf-8' }
                       );
                       const u = URL.createObjectURL(blob);
                       const a = document.createElement('a');
                       a.href = u;
-                      a.download = 'Polozhenie-MONOLITH.doc';
+                      a.download = 'Polozhenie-MONOLITH.txt';
                       a.click();
                       URL.revokeObjectURL(u);
                     }}
                   >
-                    <Download size={16} /> Скачать документ
+                    <Download size={16} /> Скачать TXT
                   </button>
                 </div>
               </div>
@@ -979,7 +978,7 @@ function App() {
                       <h2>Статус внедрения</h2>
                       <p>Перед использованием реальных финансовых данных</p>
                     </div>
-                    <span className="status status-prelim">Демонстрация</span>
+                    <span className="status status-prelim">Предварительно</span>
                   </div>
                   <div className="checklist">
                     <div>
@@ -1075,13 +1074,16 @@ function App() {
                 <strong>Требует внимания</strong>
                 <p>{selected.issue}</p>
                 <small>
-                  Демонстрационные данные. Источники и формулы не подключены.
+                  Источник: {SOURCE_NAME} · {SOURCE_SHEET}!{selected.sourceRow}. Первичные документы не сверены.
                 </small>
               </div>
             </div>
             <button
               className="btn-primary full-btn"
               onClick={() => {
+                setAiText('Шифр: ' + selected.id + '. Заказчик: ' + selected.customer
+                  + '. Выручка факт: ' + selected.revenue + ', себестоимость факт: ' + selected.cost
+                  + '. Замечание: ' + selected.issue);
                 setPage('checks');
                 setSelected(null);
               }}
