@@ -16,6 +16,8 @@ export type FinancialDeal = {
   cost: number;
   plan: number;
   status: string;
+  period?: string | null;
+  issue?: string;
 };
 export type BlockParameter = {
   name: string;
@@ -117,6 +119,23 @@ export function checkFinancialRegister(deals: readonly FinancialDeal[], params: 
     }
     if (policy && !policy.active) continue;
     checkedDeals += 1;
+    // Source workbook integrity findings are deterministic and must never be
+    // replaced by an AI opinion or an automatic "approved" status.
+    if (deal.block === 'Комплексная сделка') {
+      const issue = deal.issue || '';
+      if (issue.includes('не совпадает с суммой')) {
+        issues.push({ code: 'SOURCE_REVENUE_MISMATCH', level: 'blocker', dealId: deal.id,
+          message: `В исходном XLSX компоненты выручки сделки ${deal.id} не сходятся с итогом.` });
+      }
+      if (deal.period === null) {
+        issues.push({ code: 'SOURCE_PERIOD_MISSING', level: 'blocker', dealId: deal.id,
+          message: `У сделки ${deal.id} отсутствует период в исходном XLSX.` });
+      }
+      if (issue.includes('#DIV/0!')) {
+        issues.push({ code: 'SOURCE_DIV_ZERO', level: 'warning', dealId: deal.id,
+          message: `В источнике сделки ${deal.id} есть #DIV/0! в цене за килограмм.` });
+      }
+    }
     if (![deal.revenue, deal.cost, deal.plan].every(value => Number.isFinite(value) && value >= 0)) {
       issues.push({ code: 'INVALID_AMOUNT', level: 'blocker', dealId: deal.id, message: `Некорректная сумма по сделке ${deal.id}.` });
       continue;
