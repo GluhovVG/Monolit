@@ -1,4 +1,5 @@
 import { db, ws, json, error } from '@appdeploy/sdk';
+import { collectPages, forEachBatch } from './paged-records';
 
 const SUBSCRIPTIONS_TABLE = 'entity_subscriptions';
 
@@ -11,8 +12,10 @@ export type SubscriptionRecord = {
 };
 
 async function listSubscriptions(): Promise<SubscriptionRecord[]> {
-  const { items } = await db.list(SUBSCRIPTIONS_TABLE, { limit: 1000 });
-  return items as SubscriptionRecord[];
+  return collectPages(async nextToken => {
+    const page = await db.list<SubscriptionRecord>(SUBSCRIPTIONS_TABLE, { limit: 200, nextToken });
+    return { items: page.items as SubscriptionRecord[], nextToken: page.nextToken };
+  });
 }
 
 export async function removeSubscriptionsByConnection(connectionId: string) {
@@ -21,7 +24,10 @@ export async function removeSubscriptionsByConnection(connectionId: string) {
     .filter(item => item.connection_id === connectionId)
     .map(item => item.id);
   if (matchIds.length > 0) {
-    await db.delete(SUBSCRIPTIONS_TABLE, matchIds);
+    await forEachBatch(matchIds, 200, async batch => {
+      const outcomes = await db.delete(SUBSCRIPTIONS_TABLE, batch);
+      if (outcomes.some(ok => !ok)) throw new Error('Unable to remove all subscriptions');
+    });
   }
 }
 
@@ -30,7 +36,7 @@ export async function addSubscription(
   entityId: string,
   connectionId: string
 ) {
-  await db.add(SUBSCRIPTIONS_TABLE, [
+  const [id] = await db.add(SUBSCRIPTIONS_TABLE, [
     {
       entity_type: entityType,
       entity_id: entityId,
@@ -38,6 +44,7 @@ export async function addSubscription(
       created_at: Date.now(),
     },
   ]);
+  if (!id) throw new Error('Subscription was not saved');
 }
 
 export async function removeSubscriptions(
@@ -55,7 +62,10 @@ export async function removeSubscriptions(
     )
     .map(item => item.id);
   if (matchIds.length > 0) {
-    await db.delete(SUBSCRIPTIONS_TABLE, matchIds);
+    await forEachBatch(matchIds, 200, async batch => {
+      const outcomes = await db.delete(SUBSCRIPTIONS_TABLE, batch);
+      if (outcomes.some(ok => !ok)) throw new Error('Unable to remove all subscriptions');
+    });
   }
 }
 
@@ -78,14 +88,16 @@ export async function notifySubscribers(
     return;
   }
 
-  await ws.send(targetConnectionIds, {
-    v: 1,
-    type: 'entity.update',
-    payload: {
-      entity_type: entityType,
-      entity_id: entityId,
-      data: payload,
-    },
+  await forEachBatch(targetConnectionIds, 200, async batch => {
+    await ws.send(batch, {
+      v: 1,
+      type: 'entity.update',
+      payload: {
+        entity_type: entityType,
+        entity_id: entityId,
+        data: payload,
+      },
+    });
   });
 }
 
