@@ -348,10 +348,7 @@ function App() {
                     onChange={e => setPeriod(e.target.value)}
                     aria-label="Период"
                   >
-                    <option>Октябрь 2026</option>
-                    <option>Сентябрь 2026</option>
-                    <option>Август 2026</option>
-                    <option>Январь — октябрь 2026</option>
+                    {periodOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                   <button className="btn-secondary" onClick={exportCsv}>
                     <Download size={16} /> Excel
@@ -368,50 +365,50 @@ function App() {
                 <span>
                   <Clock3 size={15} /> Период: <b>{period}</b>
                 </span>
-                <span>Сравнение: нет исторических данных</span>
-                <span className="prelim-tag">Показатели демонстрационные</span>
+                <span>{comparison ? 'Сравнение с предыдущим месяцем' : 'Нет сопоставимых данных предыдущего периода'}</span>
+                <span className="prelim-tag">XLSX 2025 · предварительные данные</span>
               </div>
               <div className="kpi-grid">
                 <Kpi
                   label="Выручка"
                   value={periodDeals.length ? money(totals.revenue) : '—'}
-                  change="—"
-                  trend="flat"
-                  note="нет данных сравнения"
+                  change={change(totals.revenue, comparison?.revenue)}
+                  trend={trend(totals.revenue, comparison?.revenue)}
+                  note={comparisonLabel}
                   color="blue"
                 />
                 <Kpi
                   label="Затраты"
                   value={periodDeals.length ? money(totals.cost) : '—'}
-                  change="—"
-                  trend="flat"
-                  note="нет данных сравнения"
+                  change={change(totals.cost, comparison?.cost)}
+                  trend={trend(totals.cost, comparison?.cost)}
+                  note={comparisonLabel}
                   color="orange"
                 />
                 <Kpi
                   label="Прибыль"
                   value={periodDeals.length ? money(profit) : '—'}
-                  change="—"
-                  trend="flat"
-                  note="нет данных сравнения"
+                  change={change(profit, comparison?.profit)}
+                  trend={trend(profit, comparison?.profit)}
+                  note={comparisonLabel}
                   color="green"
                 />
                 <Kpi
                   label="Рентабельность продаж"
-                  value={margin === null ? '—' : pct(margin)}
-                  change="—"
-                  trend="flat"
-                  note="нет данных сравнения"
+                  value={margin === null || !periodDeals.length ? '—' : pct(margin)}
+                  change={margin !== null && comparison?.margin != null ? pct(margin - comparison.margin) + ' п.п.' : '—'}
+                  trend={margin !== null && comparison?.margin != null ? trend(margin, comparison.margin) : 'flat'}
+                  note={comparisonLabel}
                   color="violet"
                 />
               </div>
               {periodDeals.length === 0 && (
-                <div className="bottom-note">За этот период источники не загружены. Отсутствие данных не означает нулевой результат.</div>
+                <div className="bottom-note">За выбранный период в импортированном XLSX нет записей. Отсутствие данных не означает нулевой результат.</div>
               )}
               <div className="section-head">
                 <div>
-                  <h2>Результаты по блокам</h2>
-                  <p>Сводные суммы · нажмите на блок для просмотра сделок</p>
+                  <h2>Расшифровка фактических затрат</h2>
+                  <p>По направлениям из Excel · без повторного учёта выручки</p>
                 </div>
                 <button
                   className="text-action"
@@ -447,27 +444,13 @@ function App() {
                       <ArrowUpRight size={16} className="muted-icon" />
                     </div>
                     <h3>{b.name}</h3>
-                    <strong>{money(b.revenue - b.cost)}</strong>
-                    <small>
-                      Прибыль · {b.count} {b.count === 1 ? 'сделка' : 'сделки'}
-                    </small>
+                    <strong>{b.amount !== null ? money(b.amount) : '—'}</strong>
+                    <small>{b.count} сделок с указанными затратами</small>
+                    <div className="mini-bar"><span style={{ width: b.amount !== null && totals.cost > 0
+                      ? Math.min(100, Math.max(0, (b.amount / totals.cost) * 100)) + '%' : '0%' }}></span></div>
                     <div className="block-meta">
-                      <span>Выручка</span>
-                      <b>{money(b.revenue)}</b>
-                    </div>
-                    <div className="mini-bar">
-                      <span
-                        style={{
-                          width:
-                            (b.revenue
-                              ? Math.max(8, (b.cost / b.revenue) * 100)
-                              : 0) + '%',
-                        }}
-                      ></span>
-                    </div>
-                    <div className="block-meta">
-                      <span>Затраты</span>
-                      <b>{money(b.cost)}</b>
+                      <span>{b.complete ? 'Факт из Excel' : 'Факт (неполные данные)'}</span>
+                      <b>{b.amount !== null ? money(b.amount) : 'нет данных'}</b>
                     </div>
                   </button>
                 ))}
@@ -582,10 +565,7 @@ function App() {
                 </div>
                 <div className="heading-actions">
                   <select value={period} onChange={e => setPeriod(e.target.value)} aria-label="Период реестра">
-                    <option>Октябрь 2026</option>
-                    <option>Сентябрь 2026</option>
-                    <option>Август 2026</option>
-                    <option>Январь — октябрь 2026</option>
+                    {periodOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                   <button className="btn-secondary" onClick={exportCsv}>
                     <Download size={16} /> Экспорт Excel
