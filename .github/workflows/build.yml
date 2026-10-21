@@ -2,7 +2,7 @@ name: Build check
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feature/**']
   pull_request:
     branches: [main]
 
@@ -18,5 +18,9 @@ jobs:
           node-version: 20
       - name: Install dependencies
         run: npm install
+      - name: TypeScript check
+        run: npm run typecheck
+      - name: Financial regression tests
+        run: npm test
       - name: Build frontend
         run: npm run build
