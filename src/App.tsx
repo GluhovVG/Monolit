@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { DEFAULT_GENERAL_PARAMETERS, checkFinancialRegister, financialTotals, type GeneralParameters } from './domain/financial-controls';
 const api = {
   post: async (path: string, body: unknown) => {
     const response = await fetch(path, {
@@ -171,6 +172,9 @@ const regulationSections = [
 function App() {
   const [page, setPage] = useState('dashboard');
   const [period, setPeriod] = useState('Октябрь 2026');
+  const [generalParameters, setGeneralParameters] = useState<GeneralParameters>(DEFAULT_GENERAL_PARAMETERS);
+  // Only October has seeded demo records. Missing historical periods are not zero values.
+  const periodDeals = useMemo(() => period === 'Октябрь 2026' ? seedDeals : [], [period]);
   const [filter, setFilter] = useState('Все блоки');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Deal | null>(null);
@@ -183,39 +187,33 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const deals = useMemo(
     () =>
-      seedDeals.filter(
+      periodDeals.filter(
         d =>
           (filter === 'Все блоки' || d.block === filter) &&
           (d.name + d.id + d.block).toLowerCase().includes(search.toLowerCase())
       ),
-    [filter, search]
+    [filter, search, periodDeals]
   );
-  const totals = useMemo(
-    () =>
-      deals.reduce(
-        (a, d) => ({
-          revenue: a.revenue + d.revenue,
-          cost: a.cost + d.cost,
-          plan: a.plan + d.plan,
-        }),
-        { revenue: 0, cost: 0, plan: 0 }
-      ),
-    [deals]
-  );
-  const profit = totals.revenue - totals.cost;
-  const margin = totals.revenue ? (profit / totals.revenue) * 100 : 0;
-  const blocks = ['МК', 'Комплектация', 'Документация', 'СМР', 'Логистика'].map(
-    name => {
-      const ds = seedDeals.filter(d => d.block === name);
+  const totals = useMemo(() => financialTotals(periodDeals, generalParameters), [periodDeals, generalParameters]);
+  const reportCheck = useMemo(() => checkFinancialRegister(periodDeals, generalParameters), [periodDeals, generalParameters]);
+  const profit = totals.profit;
+  const margin = totals.margin;
+  const blocks = generalParameters.blocks
+    .filter(block => block.active && block.includeInTotals)
+    .map(({ name }) => {
+      const ds = periodDeals.filter(d => d.block === name);
       return {
         name,
-        revenue: ds.reduce((s, d) => s + d.revenue, 0),
-        cost: ds.reduce((s, d) => s + d.cost, 0),
+        revenue: ds.reduce((sum, deal) => sum + deal.revenue, 0),
+        cost: ds.reduce((sum, deal) => sum + deal.cost, 0),
         count: ds.length,
       };
-    }
-  );
+    });
   const exportCsv = () => {
+    if (!deals.length) {
+      setNotice('За выбранный период или фильтр нет данных для выгрузки.');
+      return;
+    }
     const rows = [
       [
         'ID сделки',
