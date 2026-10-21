@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DEFAULT_GENERAL_PARAMETERS, checkFinancialRegister, financialTotals, type GeneralParameters } from './domain/financial-controls';
+import { buildAccountingCsv } from './domain/finance-export';
 import {
   accountingDeals, dealsForPeriod, periods, sumKnown, SOURCE_NAME, SOURCE_SHEET,
   type AccountingDeal, type BlockName,
@@ -162,51 +163,21 @@ function App() {
     before === undefined ? 'flat' : now > before ? 'up' : now < before ? 'down' : 'flat';
   const comparisonLabel = comparison ? 'к предыдущему месяцу' : 'нет данных для сравнения';
   const exportCsv = () => {
-    if (!deals.length) {
+    const selectedRows = page === 'deals' ? deals : periodDeals;
+    if (!selectedRows.length) {
       setNotice('За выбранный период или фильтр нет данных для выгрузки.');
       return;
     }
-    const rows = [
-      [
-        'Период', 'Шифр сделки', 'Заказчик', 'Изделие',
-        'Выручка план, ₽', 'Выручка факт, ₽',
-        'Себестоимость план, ₽', 'Себестоимость факт, ₽',
-        'Прибыль факт, ₽', 'Рентабельность продаж, %',
-        'Вес факт, кг', 'Строка Excel', 'Статус сверки', 'Замечания',
-      ],
-      ...deals.map(d => [
-        d.period || 'Без периода', d.id, d.customer, d.name,
-        d.plan, d.revenue, d.planCost, d.cost,
-        d.revenue - d.cost,
-        d.revenue ? (((d.revenue - d.cost) / d.revenue) * 100).toFixed(2) : '',
-        d.weightKg ?? '', SOURCE_SHEET + '!' + d.sourceRow,
-        d.status, d.issue,
-      ]),
-    ];
-    const csv =
-      '\uFEFF' +
-      rows
-        .map(r =>
-          r.map(v => {
-            const text = String(v);
-            const safe = typeof v === 'string' && /^[=+@\-\t\r]/.test(text) ? "'" + text : text;
-            return '"' + safe.replace(/"/g, '""') + '"';
-          }).join(';')
-        )
-        .join('\r\n');
-    const url = URL.createObjectURL(
-      new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    );
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'MONOLITH-Upravlencheskiy-uchet-2025.csv';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    const csv = buildAccountingCsv(selectedRows, SOURCE_SHEET);
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'MONOLITH-Upravlencheskiy-uchet-2025.csv';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setNotice(
-      'Экспортирован CSV из исходного XLSX. Показатели требуют проверки первичных документов.'
-    );
+    setNotice('Экспортирован CSV из исходного XLSX. Показатели требуют сверки первичных документов.');
   };
   const runAi = async () => {
     if (aiAvailability !== 'available') {
