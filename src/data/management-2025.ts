@@ -48,7 +48,7 @@ const SOURCE_REVENUE_CONFLICT_ROWS = new Set([34, 51, 52]);
 const files = [january, febApril, springSummer, summer, autumn, winter];
 
 export const accountingDeals: AccountingDeal[] = files.flatMap(file =>
-  (file as SourceRow[]).map(row => {
+  (file as unknown as SourceRow[]).map(row => {
     const [sourceRow, id, month, customer, name, plan, revenue, planCost, cost,
       weightKg, , mkCost, docs, supply, delivery, smr, fines] = row;
     const issue = [
