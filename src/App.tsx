@@ -200,8 +200,10 @@ function App() {
     const a = document.createElement('a');
     a.href = url;
     a.download = 'MONOLITH-Upravlencheskiy-uchet-2025.csv';
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     setNotice(
       'Экспортирован CSV из исходного XLSX. Показатели требуют проверки первичных документов.'
     );
@@ -464,10 +466,10 @@ function App() {
                       <h2>Приоритетные сделки</h2>
                       <p>Список для внимания администратора</p>
                     </div>
-                    <span className="counter">{periodDeals.filter(d => d.status !== 'Подтверждён').length} требуют внимания</span>
+                    <span className="counter">{periodDeals.filter(d => /отсутствует период|#DIV\/0!|не совпадает с суммой/i.test(d.issue)).length} исходных конфликтов</span>
                   </div>
                   {periodDeals
-                    .filter(d => d.status !== 'Подтверждён')
+                    .filter(d => /отсутствует период|#DIV\/0!|не совпадает с суммой/i.test(d.issue))
                     .slice(0, 3)
                     .map((d, i) => (
                       <button
@@ -808,6 +810,8 @@ function App() {
                         );
                         w.document.close();
                         w.print();
+                      } else {
+                        setNotice('Браузер заблокировал окно печати. Разрешите всплывающие окна и повторите.');
                       }
                     }}
                   >
@@ -829,8 +833,10 @@ function App() {
                       const a = document.createElement('a');
                       a.href = u;
                       a.download = 'Polozhenie-MONOLITH.txt';
+                      document.body.appendChild(a);
                       a.click();
-                      URL.revokeObjectURL(u);
+                      a.remove();
+                      window.setTimeout(() => URL.revokeObjectURL(u), 1000);
                     }}
                   >
                     <Download size={16} /> Скачать TXT
