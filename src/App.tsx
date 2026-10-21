@@ -25,7 +25,6 @@ import {
   FileText,
   Search,
   Bell,
-  ChevronDown,
   Download,
   Printer,
   ShieldCheck,
@@ -105,6 +104,11 @@ function App() {
   const [generalParameters, setGeneralParameters] = useState<GeneralParameters>(DEFAULT_GENERAL_PARAMETERS);
   const periodDeals = useMemo(() => dealsForPeriod(accountingDeals, period), [period]);
   const [filter, setFilter] = useState('Все блоки');
+  useEffect(() => {
+    if (filter !== 'Все блоки' && !generalParameters.blocks.some(b => b.name === filter && b.active && b.includeInTotals)) {
+      setFilter('Все блоки');
+    }
+  }, [filter, generalParameters.blocks]);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Deal | null>(null);
   const [aiText, setAiText] = useState('');
@@ -255,10 +259,9 @@ function App() {
         <div className="workspace">
           <span className="workspace-dot"></span>
           <div>
-            <strong>Главная компания</strong>
+            <strong>Импорт управленческого учёта</strong>
             <small>Управленческий учёт · 2025</small>
           </div>
-          <ChevronDown size={15} />
         </div>
         <div className="nav-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
         <nav>
@@ -287,12 +290,11 @@ function App() {
           </div>
         </div>
         <div className="profile">
-          <div className="avatar">А</div>
+          <div className="avatar">?</div>
           <div>
             <strong>Без входа в систему</strong>
             <small>Все данные предварительные</small>
           </div>
-          <ChevronDown size={16} />
         </div>
       </aside>
       <main className="main">
@@ -319,7 +321,7 @@ function App() {
               <Bell size={18} />
               <i></i>
             </button>
-            <div className="top-avatar">А</div>
+            <div className="top-avatar">?</div>
           </div>
         </header>
         <div className="content">
@@ -351,7 +353,7 @@ function App() {
                     {periodOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                   <button className="btn-secondary" onClick={exportCsv}>
-                    <Download size={16} /> Excel
+                    <Download size={16} /> CSV
                   </button>
                   <button
                     className="btn-primary"
@@ -568,7 +570,7 @@ function App() {
                     {periodOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                   <button className="btn-secondary" onClick={exportCsv}>
-                    <Download size={16} /> Экспорт Excel
+                    <Download size={16} /> Экспорт CSV
                   </button>
                   <button
                     className="btn-primary"
@@ -602,10 +604,11 @@ function App() {
                 <table>
                   <thead>
                     <tr>
-                      <th>СДЕЛКА</th>
-                      <th>БЛОК</th>
-                      <th>ВЫРУЧКА</th>
-                      <th>ЗАТРАТЫ</th>
+                      <th>ШИФР / ИЗДЕЛИЕ</th>
+                      <th>ЗАКАЗЧИК</th>
+                      <th>ПЕРИОД</th>
+                      <th>ВЫРУЧКА ФАКТ</th>
+                      <th>СЕБЕСТОИМОСТЬ ФАКТ</th>
                       <th>ПРИБЫЛЬ</th>
                       <th>РЕНТАБЕЛЬНОСТЬ</th>
                       <th>СТАТУС</th>
@@ -613,14 +616,14 @@ function App() {
                   </thead>
                   <tbody>
                     {deals.map(d => (
-                      <tr key={d.id} onClick={() => setSelected(d)}>
+                      <tr key={d.id} onClick={() => setSelected(d)} tabIndex={0} role="button"
+                        onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(d); } }}>
                         <td>
                           <strong>{d.name}</strong>
                           <small>{d.id}</small>
                         </td>
-                        <td>
-                          <span className="block-chip">{d.block}</span>
-                        </td>
+                        <td>{d.customer}</td>
+                        <td>{d.period || 'Без периода'}</td>
                         <td>{money(d.revenue)}</td>
                         <td>{money(d.cost)}</td>
                         <td
@@ -656,8 +659,8 @@ function App() {
                 )}
               </div>
               <div className="table-foot">
-                Нажмите на строку, чтобы открыть карточку сделки. Источники и
-                фактические расчёты подключаются при внедрении.
+                Нажмите на строку или Enter, чтобы открыть карточку. Источник: {SOURCE_SHEET} из XLSX.
+                Все суммы предварительные и требуют сверки.
               </div>
             </>
           )}
@@ -683,7 +686,7 @@ function App() {
                   ))}
                   {reportCheck.issues.length === 0 && <div><CheckCircle2 size={16}/>Нет замечаний к реестру.</div>}
                 </div>
-                <p>Демо-проверка не заменяет сверку первичных источников и утверждение администратором.</p>
+                <p>Проверки импортированного XLSX не заменяют сверку первичных документов и утверждение результата.</p>
               </section>
               <div className="ai-banner">
                 <div className="ai-badge">
@@ -721,7 +724,7 @@ function App() {
                 />
                 <div className="ai-form-footer">
                   <small>
-                    Не вводите пароли или избыточные персональные данные.
+                    При отправке текст передаётся через /api/review-change серверному ИИ. Не добавляйте конфиденциальные сведения без разрешения.
                   </small>
                   <button
                     className="btn-primary"
@@ -899,7 +902,7 @@ function App() {
               </div>
               <section className="panel settings-panel wide" style={{ marginBottom: 20 }}>
                 <div className="panel-heading"><div><h2>Общие финансовые параметры</h2>
-                  <p>Влияют на отображаемые итоги и обязательные проверки в текущем сеансе.</p></div>
+                  <p>Определяют пороги предупреждений и видимые направления затрат. Полный итог сделки не меняется при скрытии направления.</p></div>
                   <button className="btn-secondary" onClick={() => setGeneralParameters(DEFAULT_GENERAL_PARAMETERS)}>Сбросить</button>
                 </div>
                 <div className="filters">
@@ -910,7 +913,7 @@ function App() {
                 </div>
                 <p>Отклонение существенно при достижении порога в рублях ИЛИ процентах.</p>
                 <div className="table-wrap"><table>
-                  <thead><tr><th>Блок</th><th>Активен</th><th>Учитывать в итогах</th><th>Требовать подтверждение</th></tr></thead>
+                  <thead><tr><th>Блок</th><th>Активен</th><th>Показывать в детализации</th><th>Требовать подтверждение</th></tr></thead>
                   <tbody>{generalParameters.blocks.map(block => (
                     <tr key={block.name}><td>{block.name}</td>
                       {(['active', 'includeInTotals', 'requireConfirmation'] as const).map(field => (
@@ -1080,9 +1083,8 @@ function App() {
             <button
               className="btn-primary full-btn"
               onClick={() => {
-                setAiText('Шифр: ' + selected.id + '. Заказчик: ' + selected.customer
-                  + '. Выручка факт: ' + selected.revenue + ', себестоимость факт: ' + selected.cost
-                  + '. Замечание: ' + selected.issue);
+                setAiText('Шифр сделки: ' + selected.id + '. Замечание: ' + selected.issue
+                  + ' Проверь риск и рекомендуемое действие.');
                 setPage('checks');
                 setSelected(null);
               }}
