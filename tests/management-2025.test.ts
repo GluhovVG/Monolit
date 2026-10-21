@@ -51,4 +51,12 @@ describe('Imported management workbook 2025', () => {
     for (const row of [34, 51, 52]) assert.ok(accountingDeals.find(item => item.sourceRow === row)?.issue.includes('Выручка'));
     for (const row of [50, 80, 90, 91, 96]) assert.ok(accountingDeals.find(item => item.sourceRow === row)?.issue.includes('#DIV/0!'));
   });
+  it('fails the readiness check for source arithmetic conflicts and missing periods', () => {
+    const year = checkFinancialRegister(dealsForPeriod(accountingDeals, '2025'), DEFAULT_GENERAL_PARAMETERS);
+    assert.equal(year.issues.filter(issue => issue.code === 'SOURCE_REVENUE_MISMATCH').length, 3);
+    assert.equal(year.issues.filter(issue => issue.code === 'SOURCE_DIV_ZERO').length, 5);
+    const missing = checkFinancialRegister(dealsForPeriod(accountingDeals, 'undated'), DEFAULT_GENERAL_PARAMETERS);
+    assert.equal(missing.issues.filter(issue => issue.code === 'SOURCE_PERIOD_MISSING').length, 1);
+    assert.equal(year.okToPublish, false);
+  });
 });
