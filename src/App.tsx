@@ -23,7 +23,6 @@ const api = {
 import {
   LayoutDashboard,
   FileText,
-  Upload,
   Search,
   Bell,
   ChevronDown,
