@@ -744,6 +744,18 @@ function App() {
                   <span></span> Режим демонстрации
                 </span>
               </div>
+              <section className="panel settings-panel">
+                <div className="panel-heading"><div><h2>Обязательные проверки</h2><p>Детерминированные правила проверяются до анализа ИИ.</p></div></div>
+                <p>Проверено сделок: {reportCheck.checkedDeals}. Блокировок: {reportCheck.blockers}. Предупреждений: {reportCheck.warnings}.</p>
+                <div className="checklist">
+                  {reportCheck.issues.slice(0, 12).map((issue, index) => (
+                    <div key={issue.code + index}><AlertTriangle size={16} />
+                      {issue.level === 'blocker' ? 'Блокировка: ' : 'Предупреждение: '}{issue.message}</div>
+                  ))}
+                  {reportCheck.issues.length === 0 && <div><CheckCircle2 size={16}/>Нет замечаний к реестру.</div>}
+                </div>
+                <p>Демо-проверка не заменяет сверку первичных источников и утверждение администратором.</p>
+              </section>
               <div className="ai-banner">
                 <div className="ai-badge">
                   <BrainCircuit size={22} />
@@ -953,11 +965,37 @@ function App() {
                   <div className="eyebrow">КОНФИГУРАЦИЯ</div>
                   <h1>Настройки</h1>
                   <p>
-                    Согласованные параметры системы. Новые параметры не
-                    добавляются.
+                    Общие параметры демо-сеанса. Постоянное серверное хранение пока не подключено.
                   </p>
                 </div>
               </div>
+              <section className="panel settings-panel wide" style={{ marginBottom: 20 }}>
+                <div className="panel-heading"><div><h2>Общие финансовые параметры</h2>
+                  <p>Влияют на отображаемые итоги и обязательные проверки в текущем сеансе.</p></div>
+                  <button className="btn-secondary" onClick={() => setGeneralParameters(DEFAULT_GENERAL_PARAMETERS)}>Сбросить</button>
+                </div>
+                <div className="filters">
+                  <label>Порог, ₽ <input aria-label="Порог в рублях" type="number" min="1" value={generalParameters.materialityRub}
+                    onChange={e => setGeneralParameters(prev => ({ ...prev, materialityRub: Number(e.target.value) }))}/></label>
+                  <label>Порог, % <input aria-label="Порог в процентах" type="number" min="0.1" max="100" step="0.1" value={generalParameters.materialityPercent}
+                    onChange={e => setGeneralParameters(prev => ({ ...prev, materialityPercent: Number(e.target.value) }))}/></label>
+                </div>
+                <p>Отклонение существенно при достижении порога в рублях ИЛИ процентах.</p>
+                <div className="table-wrap"><table>
+                  <thead><tr><th>Блок</th><th>Активен</th><th>Учитывать в итогах</th><th>Требовать подтверждение</th></tr></thead>
+                  <tbody>{generalParameters.blocks.map(block => (
+                    <tr key={block.name}><td>{block.name}</td>
+                      {(['active', 'includeInTotals', 'requireConfirmation'] as const).map(field => (
+                        <td key={field}><input type="checkbox" checked={block[field]} aria-label={block.name + ' ' + field}
+                          onChange={e => setGeneralParameters(prev => ({ ...prev,
+                            blocks: prev.blocks.map(item => item.name === block.name ? { ...item, [field]: e.target.checked } : item),
+                          }))}/></td>
+                      ))}
+                    </tr>
+                  ))}</tbody>
+                </table></div>
+                <p>Данные демонстрационные. Настройки сбрасываются после обновления страницы и не меняют права доступа.</p>
+              </section>
               <div className="settings-grid">
                 <section className="panel settings-panel">
                   <div className="panel-heading">
@@ -998,7 +1036,7 @@ function App() {
                   />
                   <Setting
                     label="Порог существенности"
-                    desc="50 000 ₽ или 2% — требует утверждения для рабочего запуска"
+                    desc={generalParameters.materialityRub.toLocaleString("ru-RU") + " ₽ или " + generalParameters.materialityPercent + "% (демо)"}
                   />
                   <Setting
                     label="Подтверждение результата"
