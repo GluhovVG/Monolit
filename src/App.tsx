@@ -165,33 +165,30 @@ function App() {
     }
     const rows = [
       [
-        'ID сделки',
-        'Сделка',
-        'Блок',
-        'Выручка, ₽',
-        'Затраты, ₽',
-        'Прибыль, ₽',
-        'Рентабельность, %',
-        'План, ₽',
-        'Статус',
+        'Период', 'Шифр сделки', 'Заказчик', 'Изделие',
+        'Выручка план, ₽', 'Выручка факт, ₽',
+        'Себестоимость план, ₽', 'Себестоимость факт, ₽',
+        'Прибыль факт, ₽', 'Рентабельность продаж, %',
+        'Вес факт, кг', 'Строка Excel', 'Статус сверки', 'Замечания',
       ],
       ...deals.map(d => [
-        d.id,
-        d.name,
-        d.block,
-        d.revenue,
-        d.cost,
+        d.period || 'Без периода', d.id, d.customer, d.name,
+        d.plan, d.revenue, d.planCost, d.cost,
         d.revenue - d.cost,
         d.revenue ? (((d.revenue - d.cost) / d.revenue) * 100).toFixed(2) : '',
-        d.plan,
-        d.status,
+        d.weightKg ?? '', SOURCE_SHEET + '!' + d.sourceRow,
+        d.status, d.issue,
       ]),
     ];
     const csv =
       '\uFEFF' +
       rows
         .map(r =>
-          r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(';')
+          r.map(v => {
+            const text = String(v);
+            const safe = typeof v === 'string' && /^[=+@\-\t\r]/.test(text) ? "'" + text : text;
+            return '"' + safe.replace(/"/g, '""') + '"';
+          }).join(';')
         )
         .join('\r\n');
     const url = URL.createObjectURL(
@@ -199,14 +196,18 @@ function App() {
     );
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'MONOLITH-otchet.csv';
+    a.download = 'MONOLITH-Upravlencheskiy-uchet-2025.csv';
     a.click();
     URL.revokeObjectURL(url);
     setNotice(
-      'Файл для Excel подготовлен. Это выгрузка демонстрационных данных.'
+      'Экспортирован CSV из исходного XLSX. Показатели требуют проверки первичных документов.'
     );
   };
   const runAi = async () => {
+    if (aiAvailability !== 'available') {
+      setAiResult('Сервер /api/review-change недоступен. Запрос не отправлен.');
+      return;
+    }
     if (!aiText.trim()) {
       setNotice('Введите описание изменения для проверки.');
       return;
@@ -224,10 +225,10 @@ function App() {
           '. ' +
           response.data.action
       );
-    } catch {
-      setAiResult(
-        'Проверка ИИ сейчас недоступна. Не применяйте изменение автоматически: передайте его администратору на ручную проверку.'
-      );
+    } catch (cause) {
+      setAiResult(cause instanceof Error
+        ? 'ИИ не ответил: ' + cause.message + '. Используйте ручную проверку.'
+        : 'ИИ не ответил. Используйте ручную проверку.');
     } finally {
       setAiBusy(false);
     }
