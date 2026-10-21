@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "scope": {
+    "repository": null,
+    "base": null,
+    "head": null
+  },
+  "risk_tier": "medium",
+  "verdict": "review_required",
+  "findings": [],
+  "checks": [
+    {
+      "command": "project-specific tests",
+      "status": "not_run",
+      "details": "Not run in this example: project and test commands are unspecified."
+    }
+  ],
+  "limitations": [
+    "No repository or diff attached; no actual review performed."
+  ],
+  "human_approvals": "Follow repository policy; none verified.",
+  "rollback": "Describe a real rollback path after inspecting repository/deployment configuration."
+}
