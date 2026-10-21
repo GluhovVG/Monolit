@@ -76,7 +76,9 @@ export function isMaterialDeviation(actual: number, plan: number, params: Genera
 export function financialTotals(deals: readonly FinancialDeal[], params: GeneralParameters) {
   const included = deals.filter(d => {
     const block = params.blocks.find(item => item.name === d.block);
-    return block?.active && block.includeInTotals;
+    // A management accounting deal spans multiple cost blocks: never count it
+    // five times or drop total revenue when a breakdown is hidden.
+    return d.block === 'Комплексная сделка' || Boolean(block?.active && block.includeInTotals);
   });
   if (included.some(d => ![d.revenue, d.cost, d.plan].every(value => Number.isFinite(value) && value >= 0))) {
     throw new Error('Нельзя рассчитывать итоги из некорректных сумм.');
@@ -90,7 +92,7 @@ export function financialTotals(deals: readonly FinancialDeal[], params: General
 
 /**
  * Readiness is deterministic. AI warnings never override blockers.
- * This checks the demo register; when real sources are connected, approval must
+ * Imported XLSX rows are unverified and must never be auto-approved. Future live sources
  * also check source versions, mappings, reconciliation and permissions on backend.
  */
 export function checkFinancialRegister(deals: readonly FinancialDeal[], params: GeneralParameters): CheckResult {
@@ -109,17 +111,17 @@ export function checkFinancialRegister(deals: readonly FinancialDeal[], params: 
     }
     seen.add(deal.id);
     const policy = known.get(deal.block);
-    if (!policy) {
+    if (!policy && deal.block !== 'Комплексная сделка') {
       issues.push({ code: 'UNKNOWN_BLOCK', level: 'blocker', dealId: deal.id, message: `Для сделки ${deal.id} отсутствует финансовый блок в общих параметрах.` });
       continue;
     }
-    if (!policy.active) continue;
+    if (policy && !policy.active) continue;
     checkedDeals += 1;
     if (![deal.revenue, deal.cost, deal.plan].every(value => Number.isFinite(value) && value >= 0)) {
       issues.push({ code: 'INVALID_AMOUNT', level: 'blocker', dealId: deal.id, message: `Некорректная сумма по сделке ${deal.id}.` });
       continue;
     }
-    if (policy.requireConfirmation && deal.status !== 'Подтверждён') {
+    if ((deal.block === 'Комплексная сделка' || policy?.requireConfirmation) && deal.status !== 'Подтверждён') {
       issues.push({ code: 'NOT_CONFIRMED', level: 'blocker', dealId: deal.id, message: `Сделка ${deal.id} ещё не подтверждена администратором.` });
     }
     if (isMaterialDeviation(deal.revenue, deal.plan, params)) {
