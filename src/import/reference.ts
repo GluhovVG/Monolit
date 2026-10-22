@@ -5,6 +5,8 @@ export type ReferenceRow = {
   b24: number | null;
   client: string;
   tankCode: string;
+  /** Заводской номер, e.g. «138/25». */
+  factoryNo: string;
   opp: number | null;
   sheet: string;
 };
@@ -35,8 +37,10 @@ export function parseReference(book: Workbook): ReferenceRow[] {
     const cClient = findColumn(header, x => x === 'наименование');
     const cTank = findColumn(header, x => x.startsWith('шифр') && !x.includes('бухгалтерии'));
     const cOpp = findColumn(header, x => x.includes('шифр для бухгалтерии'));
+    const cFactory = findColumn(header, x => x.startsWith('заводской номер'));
     let b24: number | null = null;
     let client = '';
+    let lastOpp: { b24: number | null; type: string; opp: number } | null = null;
     for (const row of sheet.rows.slice(h + 1)) {
       if (!row || row.every(cell => text(cell) === '')) continue;
       const rowB24 = cB24 >= 0 ? code(row[cB24]) : null;
@@ -49,13 +53,24 @@ export function parseReference(book: Workbook): ReferenceRow[] {
         client = rowClient;
       }
       const tankCode = cTank >= 0 ? text(row[cTank]) : '';
-      const opp = cOpp >= 0 ? code(row[cOpp]) : null;
+      let opp = cOpp >= 0 ? code(row[cOpp]) : null;
       if (!tankCode && opp === null) continue;
       if (lower(tankCode) === 'отсутствует') continue;
-      result.push({ b24, client, tankCode, opp, sheet: sheet.name });
+      // ОПП is written once per tank type (merged cell): next tanks of the same type in the same deal inherit it.
+      const type = tankTypeKey(tankCode);
+      if (opp === null && lastOpp && lastOpp.b24 === b24 && type && lastOpp.type === type) opp = lastOpp.opp;
+      if (opp !== null) lastOpp = { b24, type, opp };
+      const factoryNo = cFactory >= 0 ? text(row[cFactory]).replace(/^№\s*/, '') : '';
+      result.push({ b24, client, tankCode, factoryNo, opp, sheet: sheet.name });
     }
   }
   return result;
+}
+
+/** «РВС-5000/2-ПНГ», «РВС- 5 000м3», «РВСп-4950» → 'рвс-5000' / 'рвсп-4950'. Empty when no volume. */
+export function tankTypeKey(value: string): string {
+  const m = /^\s*([а-яa-z]+)\s*-?\s*(\d[\d\s]*)/i.exec(value.toLowerCase().replace(/ё/g, 'е'));
+  return m ? `${m[1]}-${m[2].replace(/\s/g, '')}` : '';
 }
 
 /** Б24 deal → set of accounting codes. */

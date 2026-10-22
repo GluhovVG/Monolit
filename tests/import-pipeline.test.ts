@@ -4,18 +4,20 @@ import { detectFileKind } from '../src/import/detect.ts';
 import { parseReference } from '../src/import/reference.ts';
 import { parseRates } from '../src/import/rates.ts';
 import { parseProduction } from '../src/import/production.ts';
-import { b24FromDealName, departmentFromFileName, detectDepartmentMapping, extractDepartmentDeals, sanitizeMapping } from '../src/import/department.ts';
+import { b24FromDealRef, departmentFromFileName, detectDepartmentMapping, extractDepartmentDeals, sanitizeMapping } from '../src/import/department.ts';
+import { b24FromTkpFileName, matchPositionOpp, parseTkp } from '../src/import/tkp.ts';
 import { normalizeName, periodFromNumber } from '../src/import/sheet.ts';
 import { computeMkLines } from '../src/domain/mk-production.ts';
-import { consolidate } from '../src/domain/consolidate.ts';
+import { consolidate, resolveTankOpp, sameContractor } from '../src/domain/consolidate.ts';
 import type { Workbook } from '../src/import/sheet.ts';
 
 const reference: Workbook = { fileName: 'Номера заказов.xlsx', sheets: [{ name: 'Текущие', rows: [
   ['заголовок'],
-  ['Б24', 'Наименование', 'Товар', null, null, null, null, null, null, 'ШИФР\nТип - Объем', null, null, null, 'Шифр для бухгалтерии (ОПП)'],
+  ['Б24', 'Наименование', 'Товар', null, null, null, null, null, null, 'ШИФР\nТип - Объем', 'Заводской номер', null, null, 'Шифр для бухгалтерии (ОПП)'],
   [],
-  [1001, 'ООО Альфа', 'РВС 1000', null, null, null, null, null, null, 'РВС-1000/1-Альфа', null, null, null, 501],
-  [null, null, 'РВС 1000', null, null, null, null, null, null, 'РВС-1000/2-Альфа', null, null, null, 502],
+  [1001, 'ООО Альфа', 'РВС 1000', null, null, null, null, null, null, 'РВС-1000/1-Альфа', '№01/26', null, null, 501],
+  [null, null, 'РВС 1000', null, null, null, null, null, null, 'РВС-1000/2-Альфа', '02/26', null, null, null],
+  [null, null, 'РВС 500', null, null, null, null, null, null, 'РВС-500/1-Альфа', '03/26', null, null, 502],
   [1002, 'ООО Бета', 'РВС 500', null, null, null, null, null, null, 'РВС-500/1-Бета', null, null, null, 'без шифра'],
 ] }] };
 const rates: Workbook = { fileName: 'Расценки.xlsx', sheets: [{ name: 'Расценки', rows: [
@@ -45,12 +47,48 @@ const ext: Workbook = { fileName: 'Выпуск сторонние.xlsx', sheets
   [502, 'Альфа', null, null, 'РВС-1000 (502)', null, null, '  Склад готовой продукции', 2, null, null, null],
   [502, 'Альфа', null, null, 'РВС-1000 (502)', null, null, 'Промтех', 0.5, null, null, null],
 ] }] };
-const dept: Workbook = { fileName: 'Закрытые сделки Проектирование февраль.xlsx', sheets: [{ name: 'Лист1', rows: [
-  ['СДЕЛКИ', 'Выручка от МК ФАКТ', 'Выручка от Проектирования ФАКТ', 'Себестоимость Проектирования ФАКТ', 'Прибыль от Проектирования ФАКТ'],
-  ['1001_Альфа_РВС', 999, 500000, 300000, 200000],
-  ['Февраль ИТОГО', 999, 500000, 300000, 200000],
-  ['Новая сделка без номера', 0, 100, 40, 60],
+// «Закрытые сделки» template: deal columns + department blocks (header row + role row). Synthetic data.
+const templateHeader = [
+  [null],
+  [null, 'Заказчик', 'Товар ', 'Сумма договора, руб с НДС', 'Штрафы/удержания, руб. с НДС', 'Ссылка на сделку Б24', 'Шифр', 'Примечание',
+    'Комплектация', null, null, null, null, null, 'Переразмещения (частичные)', null, 'Логистика до г.Самара', 'Логистика', null, null],
+  [null, null, null, null, null, null, null, null, 'Наименование', 'Поставшик/ подрядчик', 'сумма по счету, руб с НДС', 'Бюджет, руб с НДС',
+    'сумма фактических затрат, руб с НДС', '∆', 'Затраты , руб с ндс', 'Вес, тн', null, 'Бюджет, руб с НДС', 'сумма фактических затрат, руб с НДС', '∆'],
+];
+const dept: Workbook = { fileName: 'Закрытые сделки Комплектация февраль.xlsx', sheets: [{ name: 'Лист1', rows: [
+  ...templateHeader,
+  [null, 'ООО Альфа', 'РВС 1000 2шт, РВС 500', 5000000, 10000, 'https://crm.example/crm/deal/details/1001/', 'РВС-1000/1-Альфа №01/26', null,
+    'метизы', 'Поставщик А', 40000, 50000, 40000, 10000, null, null, 2000, 'КИП', null, 120000],
+  [null, null, null, null, null, null, null, null, 'прокладки', 'Поставщик Б', null, 20000, 15000, 5000],
+  [null, null, null, null, null, null, 'РВС-500/1-Альфа №03/26', null, 'ступени', 'Промтех', null, null, null, null, 30000, 0.5],
+  [null, 'Новая сделка без номера', 'РВС 50', 100000, null, null, null, null, 'КИП', 'Поставщик В', null, 1000, 800],
 ] }] };
+const logistics: Workbook = { fileName: 'Закрытые сделки Логистика февраль.xlsx', sheets: [{ name: 'Лист1', rows: [
+  ...templateHeader,
+  [null, 'ООО Альфа', 'РВС 1000 2шт, РВС 500', 5000000, 10000, 'https://crm.example/crm/deal/details/1001/', null, null,
+    null, null, null, null, null, null, null, null, null, 300000, 250000, 50000],
+  [null, 'Новая сделка без номера', 'РВС 50', 100000, null, null, null, null, null, null, null, null, null, null, null, null, null, 'самовывоз'],
+] }] };
+// «Расчёт ТКП»: two positions (tank types) of deal 1001.
+const tkpBook: Workbook = { fileName: '1001 Расчёт ТКП Альфа РВС 1000 2шт.xlsm', sheets: [{ name: 'Настройки', rows: [] }, { name: 'Расчёт ТКП', rows: [
+  ['ЗАКАЗЧИК'], [], ['Объём поставки,кг'],
+  ['Наименование позиций лота ', 'Раздел', 'Наименование', null, null, null, null, null, null, null, null, null, null, null, null,
+    'Кол-во на поставку план, кг', null, 'Итого полная себестоимость план', null, null, null, null, null, null, null,
+    'Конечная стоимость для продажи план', 'Конечная стоимость для продажи факт'],
+  ['РВС- 1000м3', 'Металлоконструкции', 'РВС- 1000м3', null, null, null, null, null, null, null, null, null, null, null, null, 3000, null, 400000],
+  [null, null, 'ИТОГО МК', null, null, null, null, null, null, null, null, null, null, null, null, 3000, null, 400000, null, null, null, null, null, null, null, 600000, 600000],
+  [null, 'Доставка до клиента', 'ПЛ', null, null, null, null, null, null, null, null, null, null, null, null, null, null, 300000],
+  ['Позиция №2'],
+  ['РВС- 500м3', 'Металлоконструкции', 'РВС- 500м3'],
+  [null, null, 'ИТОГО МК', null, null, null, null, null, null, null, null, null, null, null, null, 4000, null, 100000, null, null, null, null, null, null, null, 200000, 200000],
+  ['Позиция №3'],
+  [null, null, 'ИТОГО МК', null, null, null, null, null, null, null, null, null, null, null, null, 0, null, 0, null, null, null, null, null, null, null, 0, 0],
+] }] };
+const deptFiles = () => [dept, logistics].map(book => {
+  const meta = departmentFromFileName(book.fileName, 2026)!;
+  const mapping = detectDepartmentMapping(book, meta.department)!;
+  return { ...meta, fileName: book.fileName, mapping, deals: extractDepartmentDeals(book, mapping) };
+});
 
 describe('import: file detection and parsing', () => {
   it('detects every kind by content or name', () => {
@@ -59,11 +97,12 @@ describe('import: file detection and parsing', () => {
     assert.equal(detectFileKind(own), 'prod_own');
     assert.equal(detectFileKind(ext), 'prod_ext');
     assert.equal(detectFileKind(dept), 'department');
+    assert.equal(detectFileKind(tkpBook), 'tkp');
     assert.equal(detectFileKind({ fileName: 'x.xlsx', sheets: [{ name: 'a', rows: [['что-то']] }] }), 'unknown');
   });
-  it('carries deal number forward to following tank lines', () => {
+  it('carries deal number and ОПП of the same tank type forward; strips № from factory numbers', () => {
     const rows = parseReference(reference);
-    assert.deepEqual(rows.map(r => [r.b24, r.opp]), [[1001, 501], [1001, 502], [1002, null]]);
+    assert.deepEqual(rows.map(r => [r.b24, r.opp, r.factoryNo]), [[1001, 501, '01/26'], [1001, 501, '02/26'], [1001, 502, '03/26'], [1002, null, '']]);
   });
   it('reads monthly coefficients (2026.1 = October) and contractor rates', () => {
     const r = parseRates(rates);
@@ -78,21 +117,57 @@ describe('import: file detection and parsing', () => {
     assert.equal(parseProduction(ext).rows.length, 3);
     assert.equal(parseProduction(own).periodTo, '19.10.2026');
   });
-  it('parses department file name and columns of that department', () => {
+  it('parses department file name and the blocks owned by the department', () => {
     assert.deepEqual(departmentFromFileName('Закрытые сделки Проектирование февраль.xlsx', 2026), { department: 'Проектирование', period: '2026-02' });
     assert.deepEqual(departmentFromFileName('Закрытые сделки СМР октябрь 2025.xlsx', 2026), { department: 'СМР', period: '2025-10' });
     assert.equal(departmentFromFileName('Отчёт.xlsx', 2026), null);
-    const m = detectDepartmentMapping(dept, 'Проектирование')!;
-    assert.equal(m.revenueFact, 2);
+    const m = detectDepartmentMapping(dept, 'Комплектация')!;
+    assert.deepEqual(m.blocks.map(b => b.title), ['Комплектация', 'Переразмещения (частичные)', 'Логистика до г.Самара']);
     const deals = extractDepartmentDeals(dept, m);
     assert.equal(deals.length, 2);
     assert.equal(deals[0].b24, 1001);
-    assert.equal(b24FromDealName('7293_Полиметалл'), 7293);
-    assert.equal(b24FromDealName('Полиметалл 2026'), null);
+    assert.equal(deals[0].contractRub, 5000000);
+    // «Логистика» columns belong to another department and are ignored here.
+    assert.ok(!deals[0].lines.some(l => l.block === 'Логистика'));
+    const realloc = deals[0].lines.find(l => l.block.startsWith('Переразмещения'))!;
+    assert.deepEqual([realloc.name, realloc.supplier, realloc.factRub, realloc.tank], ['ступени', 'Промтех', 30000, 'РВС-500/1-Альфа №03/26']);
+    // Tank cell is carried down to the next lines of the same deal.
+    assert.equal(deals[0].lines.find(l => l.name === 'прокладки')!.tank, 'РВС-1000/1-Альфа №01/26');
+    assert.equal(b24FromDealRef('https://crm.example/crm/deal/details/6940/'), 6940);
+    assert.equal(b24FromDealRef('7293_Полиметалл'), 7293);
+    assert.equal(b24FromDealRef('Полиметалл 2026'), null);
+    const lm = detectDepartmentMapping(logistics, 'Логистика')!;
+    const ld = extractDepartmentDeals(logistics, lm);
+    assert.equal(ld[1].lines[0].note, 'самовывоз');
+    assert.equal(ld[1].lines[0].budgetRub, null);
   });
   it('rejects AI mappings that point outside the sheet', () => {
-    assert.equal(sanitizeMapping(dept, { headerRow: 0, deal: 0, revenueFact: 99, costFact: 3 }, 'ai'), null);
-    assert.ok(sanitizeMapping(dept, { headerRow: 0, deal: 0, revenueFact: 2, costFact: 3 }, 'ai'));
+    assert.equal(sanitizeMapping(dept, { headerRow: 1, link: 5, budget: 99, fact: 99 }, 'Комплектация'), null);
+    assert.ok(sanitizeMapping(dept, { headerRow: 1, link: 5, tank: 6, budget: 11, fact: 12 }, 'Комплектация'));
+  });
+  it('reads MK plan of every ТКП position and matches positions to ОПП', () => {
+    const t = parseTkp(tkpBook);
+    assert.equal(t.b24, 1001);
+    assert.deepEqual(t.positions.map(p => [p.name, p.weightPlanKg, p.mkCostPlan, p.mkValuePlan]), [['РВС- 1000м3', 3000, 400000, 600000], ['РВС- 500м3', 4000, 100000, 200000]]);
+    assert.equal(b24FromTkpFileName('ТКП 8559 РВС 2000 3,1.xlsm'), 8559);
+    const ref = parseReference(reference).filter(r => r.b24 === 1001);
+    assert.equal(matchPositionOpp('РВС- 1 000м3 №3', ref).opp, 501);
+    const marks = [{ b24: 1, client: '', tankCode: 'РВС-200/E-811/1', factoryNo: '', opp: 767, sheet: '' }, { b24: 1, client: '', tankCode: 'РВС-200/Е-819/2', factoryNo: '', opp: 766, sheet: '' }];
+    assert.equal(matchPositionOpp('РВС- 200м3 Е-811/1, Е-811/2', marks).opp, 767);
+    assert.deepEqual(matchPositionOpp('РВС- 200м3', marks), { opp: null, candidates: [766, 767] });
+  });
+  it('resolves tank text of a line to one ОПП, also for two tanks of the same type', () => {
+    const ref = [
+      { b24: 6, client: '', tankCode: 'РГС-25/407.1-Е-01-Алроса', factoryNo: '132/25', opp: 681, sheet: '' },
+      { b24: 6, client: '', tankCode: 'РГС-16/406-РГСН-1 - Алроса', factoryNo: '133/25', opp: 682, sheet: '' },
+      { b24: 6, client: '', tankCode: 'РГС-16/406-РГСН-2 - Алроса', factoryNo: '134/25', opp: 682, sheet: '' },
+    ];
+    assert.equal(resolveTankOpp('РГС-25/407.1-Е-01-Алроса №132/25', ref), 681);
+    assert.equal(resolveTankOpp('РГС-16/406-РГСН-1 - Алроса №133/25 и РГС-16/406-РГСН-2 - Алроса №134/25', ref), 682);
+    assert.equal(resolveTankOpp('РГС-25/407.1-Е-01-Алроса №132/25 и РГС-16/406-РГСН-1 №133/25', ref), null);
+    assert.equal(resolveTankOpp('', ref), null);
+    assert.ok(sameContractor('ООО «Промтех»', 'ПромТех'));
+    assert.ok(!sameContractor('БКК', 'ФлоуТэк'));
   });
 });
 
@@ -116,33 +191,55 @@ describe('MK production cost', () => {
   });
 });
 
-describe('consolidated deals', () => {
-  it('joins department blocks, accounting codes and MK production by Б24', () => {
-    const meta = departmentFromFileName(dept.fileName, 2026)!;
-    const m = detectDepartmentMapping(dept, meta.department)!;
-    const c = consolidate({
-      reference: parseReference(reference), rates: parseRates(rates),
-      prodOwn: parseProduction(own).rows, prodExt: parseProduction(ext).rows,
-      departments: [{ ...meta, fileName: dept.fileName, mapping: m, deals: extractDepartmentDeals(dept, m) }],
-      dealAliases: {}, contractorAliases: {},
-    });
-    const alfa = c.deals.find(d => d.b24 === 1001)!;
-    assert.deepEqual(alfa.opps, [501, 502]);
-    assert.equal(alfa.blocks[0].profitFact, 200000);
-    assert.ok(alfa.mk);
-    assert.equal(alfa.mk!.metalRub, 300000 + 1000);
-    assert.deepEqual(c.unmatchedDealNames, ['Новая сделка без номера']);
-    assert.ok(c.productionDeals.some(d => d.b24 === 1001));
+describe('register by ОПП (sheet «Сделки»)', () => {
+  const data = () => ({
+    reference: parseReference(reference), rates: parseRates(rates),
+    prodOwn: parseProduction(own).rows, prodExt: parseProduction(ext).rows,
+    departments: deptFiles(), tkp: [parseTkp(tkpBook)], dealAliases: {} as Record<string, number>, contractorAliases: {},
   });
-  it('maps a deal without a number through a confirmed alias', () => {
-    const meta = departmentFromFileName(dept.fileName, 2026)!;
-    const m = detectDepartmentMapping(dept, meta.department)!;
-    const c = consolidate({
-      reference: parseReference(reference), rates: null, prodOwn: [], prodExt: [],
-      departments: [{ ...meta, fileName: dept.fileName, mapping: m, deals: extractDepartmentDeals(dept, m) }],
-      dealAliases: { 'новая сделка без номера': 1002 }, contractorAliases: {},
-    });
-    assert.ok(c.deals.some(d => d.b24 === 1002));
+  it('one row per ОПП with revenue = MK value (ТКП) + block budgets and cost = MK + block facts + fines', () => {
+    const c = consolidate(data());
+    const r501 = c.rows.find(r => r.opp === 501)!;
+    const r502 = c.rows.find(r => r.opp === 502)!;
+    assert.equal(r501.b24, 1001);
+    assert.deepEqual(r501.tanks, ['РВС-1000/1-Альфа №01/26', 'РВС-1000/2-Альфа №02/26']);
+    assert.equal(r501.share, 0.75); // 600 000 / (600 000 + 200 000) of MK value
+    assert.equal(r501.blocks.supply.plan, 70000);
+    assert.equal(r501.blocks.supply.fact, 40000 + 15000 + 2000); // + «Логистика до г.Самара»
+    assert.equal(r501.blocks.delivery.plan, 300000 * 0.75); // deal-level line, no tank
+    assert.equal(r501.revenuePlan, 600000 + 70000 + 225000);
+    assert.equal(r501.revenueFact, r501.revenuePlan);
+    assert.equal(r501.costPlan, 400000 + 70000 + 225000);
+    // Own plant: write-off 200 000 + 100 000; work 2 t × 1000 × 50 + 1 t × 1000 × 47,5.
+    assert.equal(r501.mk!.costRub, 300000 + 100000 + 47500);
+    assert.equal(r501.costFact, 447500 + 57000 + 250000 * 0.75 + 10000 * 0.75);
+    assert.equal(r501.profitFact, r501.revenueFact! - r501.costFact!);
+    assert.equal(r501.weightPlanKg, 3000);
+    assert.equal(r501.weightFactKg, 3000);
+    assert.equal(r501.priceKg, 200);
+    // Contractor without a rate (Промтех): its cost is the reallocation from Комплектация.
+    assert.equal(r502.mk!.ext.workRub, 1.5 * 1000 * 40);
+    assert.equal(r502.mk!.ext.reallocationRub, 30000);
+    assert.equal(r502.mk!.costRub, 1000 + 60000 + 30000);
+    assert.equal(r502.blocks.supply.plan, null);
+    assert.ok(!r502.issues.some(i => i.code === 'MK_NO_RATE'));
+    assert.ok(r501.issues.some(i => i.code === 'REVENUE_VS_CONTRACT'));
+    assert.deepEqual(c.missingBlocks, ['Документация', 'СМР']);
+  });
+  it('lists deals without Б24 and maps them through a confirmed alias', () => {
+    assert.deepEqual(consolidate(data()).unmatchedDealNames, ['Новая сделка без номера РВС 50']);
+    const c = consolidate({ ...data(), dealAliases: { 'новая сделка без номера рвс 50': 1002 } });
+    const row = c.rows.find(r => r.b24 === 1002)!;
+    assert.equal(row.opp, null);
+    assert.ok(row.issues.some(i => i.code === 'NO_OPP'));
+    assert.equal(row.blocks.supply.fact, 800);
     assert.equal(c.unmatchedDealNames.length, 0);
+  });
+  it('flags a deal closed twice by the same department and production codes not in the reference', () => {
+    const files = deptFiles();
+    const c = consolidate({ ...data(), departments: [...files, { ...files[0], period: '2026-03' }] });
+    assert.ok(c.rows.find(r => r.opp === 501)!.issues.some(i => i.code === 'DUPLICATE_BLOCK'));
+    assert.deepEqual(c.production.map(p => p.opp).sort(), [501, 502]);
+    assert.ok(c.production.every(p => p.finished));
   });
 });

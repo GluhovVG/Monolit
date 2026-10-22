@@ -11,6 +11,8 @@ function cellValue(value: ExcelValue): Cell {
     const v = value as Record<string, unknown>;
     if ('error' in v) return null;
     if ('result' in v) return cellValue(v.result);
+    // Hyperlink cells: keep the URL (deal links to Б24 carry the deal number).
+    if (typeof v.hyperlink === 'string' && v.hyperlink) return v.hyperlink;
     if (Array.isArray(v.richText)) return (v.richText as Array<{ text?: string }>).map(t => t.text ?? '').join('');
     if (typeof v.text === 'string') return v.text;
   }
@@ -19,7 +21,7 @@ function cellValue(value: ExcelValue): Cell {
 
 /** Reads an .xlsx file in the browser. The library is loaded only when a file is actually opened. */
 export async function readWorkbook(file: File): Promise<Workbook> {
-  if (!/\.xlsx$/i.test(file.name)) throw new Error('Поддерживаются файлы .xlsx. Сохраните файл в формате Excel 2007+.');
+  if (!/\.xls[xm]$/i.test(file.name)) throw new Error('Поддерживаются файлы .xlsx и .xlsm. Сохраните файл в формате Excel 2007+.');
   if (file.size > 25 * 1024 * 1024) throw new Error('Файл больше 25 МБ.');
   const mod = await import('exceljs');
   const ExcelJS = (mod as unknown as { default?: typeof mod }).default ?? mod;
@@ -28,8 +30,14 @@ export async function readWorkbook(file: File): Promise<Workbook> {
   const sheets = workbook.worksheets.map(ws => {
     const rows: Cell[][] = [];
     ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
-      const values = Array.isArray(row.values) ? (row.values as ExcelValue[]).slice(1) : [];
-      rows[rowNumber - 1] = Array.from(values, cellValue);
+      const values: Cell[] = [];
+      row.eachCell({ includeEmpty: false }, (cell, col) => {
+        // A merged range keeps its value only in the top-left cell (as in Excel): other cells stay empty,
+        // so parsers can tell a new deal / tank from a continuation row.
+        if (cell.isMerged && cell.master && cell.master.address !== cell.address) return;
+        values[col - 1] = cellValue(cell.value as ExcelValue);
+      });
+      rows[rowNumber - 1] = Array.from(values, v => v ?? null);
     });
     return { name: ws.name, rows: Array.from(rows, r => r ?? []) };
   });

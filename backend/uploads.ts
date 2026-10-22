@@ -6,7 +6,7 @@ const UPLOAD_LOG = 'upload_log';
 const ALIASES = 'aliases';
 /** Leaves headroom under the 256 KiB per-item database limit. */
 const MAX_PAYLOAD_CHARS = 230_000;
-const KINDS = ['reference', 'rates', 'prod_own', 'prod_ext', 'department'] as const;
+const KINDS = ['reference', 'rates', 'prod_own', 'prod_ext', 'department', 'tkp'] as const;
 type Kind = typeof KINDS[number];
 
 type UploadBody = {
@@ -21,7 +21,10 @@ type UploadBody = {
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 function uploadId(kind: Kind, department: string, period: string): string {
-  return kind === 'department' ? `dept_${safeKey(department.toLowerCase() + '|' + period)}` : kind;
+  if (kind === 'department') return `dept_${safeKey(department.toLowerCase() + '|' + period)}`;
+  // «Расчёт ТКП»: one current version per Б24 deal (the deal number is sent in `department`).
+  if (kind === 'tkp') return `tkp_${department}`;
+  return kind;
 }
 
 export async function saveUpload(ctx: RouterContext) {
@@ -35,6 +38,7 @@ export async function saveUpload(ctx: RouterContext) {
   if (kind === 'department' && (!department || !/^\d{4}-(0[1-9]|1[0-2])$/.test(period))) {
     return error('Для файла подразделения нужны подразделение и месяц.', 400);
   }
+  if (kind === 'tkp' && !/^\d{3,7}$/.test(department)) return error('Для «Расчёта ТКП» нужен номер сделки Б24.', 400);
   if (body.payload === null || typeof body.payload !== 'object') return error('Нет данных файла.', 400);
   const serialized = JSON.stringify(body.payload);
   if (serialized.length > MAX_PAYLOAD_CHARS) {
@@ -74,7 +78,7 @@ export async function listUploads() {
 
 export async function deleteUpload(ctx: RouterContext) {
   const id = str(ctx.params.id, 40);
-  if (!/^(reference|rates|prod_own|prod_ext|dept_[0-9a-f]{8})$/.test(id)) return error('Неверный идентификатор.', 400);
+  if (!/^(reference|rates|prod_own|prod_ext|dept_[0-9a-f]{8}|tkp_\d{3,7})$/.test(id)) return error('Неверный идентификатор.', 400);
   const [ok] = await db.delete(UPLOADS, [id]);
   return json({ deleted: Boolean(ok) });
 }

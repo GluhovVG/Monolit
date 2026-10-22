@@ -1742,3 +1742,18 @@ td small {
   flex: 1;
   min-width: 0;
 }
+
+/* Register by ОПП (layout of sheet «Сделки») */
+.register-wrap { max-height: 72vh; overflow: auto; }
+.register-table { font-size: 12px; white-space: nowrap; }
+.register-table th { position: sticky; top: 0; z-index: 1; text-align: center; }
+.register-table thead tr:nth-child(2) th { top: 33px; }
+.register-table td { text-align: right; font-variant-numeric: tabular-nums; }
+.register-table td:nth-child(-n+6) { text-align: left; }
+.register-table .tanks-cell { white-space: normal; min-width: 220px; max-width: 320px; }
+.register-table .details-row td { text-align: left; white-space: normal; }
+.total-row td { font-weight: 700; background: var(--surface-2, rgba(127, 127, 127, 0.08)); }
+.row-details h3 { margin: 14px 0 6px; font-size: 14px; }
+.row-details table { font-size: 12px; }
+.check-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.register-note { margin-top: 10px; opacity: 0.85; }

@@ -12,6 +12,7 @@ export type MkLine = {
   month: string | null;
   workshop: string;
   outputT: number;
+  /** Списание по отчёту о выпуске: «Сумма всего с НДС» (металл + неметалл). */
   metalRub: number;
   /** руб/кг, null when no rate was found. */
   rate: number | null;
@@ -37,7 +38,7 @@ export type MkByOpp = {
 export type ContractorAliases = Record<string, string>;
 
 /**
- * Себестоимость производства МК = списание металла (руб) + выпуск (т × 1000 кг) × коэффициент:
+ * Себестоимость производства МК = списание («Сумма всего с НДС», руб) + выпуск (т × 1000 кг) × коэффициент:
  * – СЗ (собственное производство): коэффициент месяца из «Расценок», руб/кг;
  * – сторонние цеха: расценка подрядчика, руб/кг, одинаковая для любого месяца.
  */
@@ -56,7 +57,7 @@ export function computeMkLines(
     const workRub = rate === null ? 0 : row.outputT * 1000 * rate;
     lines.push({
       source: 'own', opp: row.opp, order: row.order, month: row.month, workshop: row.workshop,
-      outputT: row.outputT, metalRub: row.metalRub, rate, workRub, totalRub: row.metalRub + workRub,
+      outputT: row.outputT, metalRub: row.totalRub, rate, workRub, totalRub: row.totalRub + workRub,
       note: rate === null ? 'нет коэффициента СЗ за месяц' : '',
     });
   }
@@ -71,7 +72,7 @@ export function computeMkLines(
     const workRub = rate === null ? 0 : row.outputT * 1000 * rate;
     lines.push({
       source: 'external', opp: row.opp, order: row.order, month: null, workshop: row.workshop.trim(),
-      outputT: row.outputT, metalRub: row.metalRub, rate, workRub, totalRub: row.metalRub + workRub,
+      outputT: row.outputT, metalRub: row.totalRub, rate, workRub, totalRub: row.totalRub + workRub,
       note: nonProduction ? 'передача на склад, работа не начисляется' : rate === null ? 'нет расценки подрядчика' : '',
     });
   }
@@ -81,7 +82,7 @@ export function computeMkLines(
     issues.push({ level: 'blocker', message: 'Нет коэффициента СЗ за: ' + Array.from(missingMonths).sort().join(', ') + '.' });
   }
   for (const [name, tonnes] of missingContractors) {
-    issues.push({ level: 'blocker', message: `Нет расценки для «${name}» (выпуск ${tonnes.toFixed(3)} т): работа не учтена.` });
+    issues.push({ level: 'warning', message: `Нет расценки для «${name}» (выпуск ${tonnes.toFixed(3)} т): стоимость работ берётся из «Переразмещения (частичные)» Комплектации.` });
   }
   return { lines, issues, missingContractors: Array.from(missingContractors.keys()).sort() };
 }

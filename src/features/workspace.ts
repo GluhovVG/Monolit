@@ -3,11 +3,12 @@ import type { DepartmentFile } from '../import/department';
 import type { ProductionRow } from '../import/production';
 import type { Rates } from '../import/rates';
 import type { ReferenceRow } from '../import/reference';
-import type { Consolidation, WorkspaceData } from '../domain/consolidate';
+import { BLOCKS, type Consolidation, type WorkspaceData } from '../domain/consolidate';
+import type { TkpFile } from '../import/tkp';
 
 export type UploadMeta = {
   id: string;
-  kind: 'reference' | 'rates' | 'prod_own' | 'prod_ext' | 'department';
+  kind: 'reference' | 'rates' | 'prod_own' | 'prod_ext' | 'department' | 'tkp';
   fileName: string;
   department: string;
   period: string;
@@ -18,14 +19,15 @@ export type UploadMeta = {
 export type Alias = { id: string; kind: 'contractor' | 'deal'; from: string; to: string | number; confirmedBy: string };
 
 // Stored payloads are compact tuples to stay within database item limits.
-type RefTuple = [number | null, string, string, number | null, string];
+// Reference tuple: b24, client, tank code, ОПП, sheet, factory number (6th item added later, may be absent).
+type RefTuple = [number | null, string, string, number | null, string, string?];
 type ProdTuple = [number | null, string, string | null, string, number, number, number, number];
 
-export const packReference = (rows: ReferenceRow[]) => rows.map(r => [r.b24, r.client, r.tankCode, r.opp, r.sheet] as RefTuple);
+export const packReference = (rows: ReferenceRow[]) => rows.map(r => [r.b24, r.client, r.tankCode, r.opp, r.sheet, r.factoryNo] as RefTuple);
 export const packProduction = (rows: ProductionRow[]) =>
   rows.map(r => [r.opp, r.order, r.month, r.workshop, r.outputT, r.metalT, r.metalRub, r.totalRub] as ProdTuple);
 const unpackReference = (rows: RefTuple[]): ReferenceRow[] =>
-  rows.map(([b24, client, tankCode, opp, sheet]) => ({ b24, client, tankCode, opp, sheet }));
+  rows.map(([b24, client, tankCode, opp, sheet, factoryNo]) => ({ b24, client, tankCode, opp, sheet, factoryNo: factoryNo ?? '' }));
 const unpackProduction = (rows: ProdTuple[]): ProductionRow[] =>
   rows.map(([opp, order, month, workshop, outputT, metalT, metalRub, totalRub]) => ({ opp, order, month, workshop, outputT, metalT, metalRub, totalRub }));
 
@@ -33,7 +35,7 @@ export async function loadWorkspace(): Promise<{ data: WorkspaceData; uploads: U
   const [u, a] = await Promise.all([api.get('/api/uploads'), api.get('/api/aliases')]);
   const raw = ((u.data as { uploads?: Array<UploadMeta & { payload: unknown }> }).uploads ?? []);
   const aliases = ((a.data as { aliases?: Alias[] }).aliases ?? []);
-  const data: WorkspaceData = { reference: null, rates: null, prodOwn: null, prodExt: null, departments: [], dealAliases: {}, contractorAliases: {} };
+  const data: WorkspaceData = { reference: null, rates: null, prodOwn: null, prodExt: null, departments: [], tkp: [], dealAliases: {}, contractorAliases: {} };
   for (const item of raw) {
     const p = item.payload as Record<string, unknown> | null;
     if (!p) continue;
@@ -41,7 +43,11 @@ export async function loadWorkspace(): Promise<{ data: WorkspaceData; uploads: U
     if (item.kind === 'rates') data.rates = p as unknown as Rates;
     if (item.kind === 'prod_own') data.prodOwn = unpackProduction((p.rows as ProdTuple[]) ?? []);
     if (item.kind === 'prod_ext') data.prodExt = unpackProduction((p.rows as ProdTuple[]) ?? []);
-    if (item.kind === 'department') data.departments.push(p as unknown as DepartmentFile);
+    // Files saved by an earlier version have no cost lines: they must be uploaded again.
+    if (item.kind === 'department' && Array.isArray(p.deals) && (p.deals as Array<{ lines?: unknown }>).every(d => Array.isArray(d.lines))) {
+      data.departments.push(p as unknown as DepartmentFile);
+    }
+    if (item.kind === 'tkp') data.tkp.push(p as unknown as TkpFile);
   }
   for (const al of aliases) {
     if (al.kind === 'deal' && typeof al.to === 'number') data.dealAliases[al.from] = al.to;
@@ -53,25 +59,26 @@ export async function loadWorkspace(): Promise<{ data: WorkspaceData; uploads: U
 
 const r0 = (n: number | null | undefined) => (n === null || n === undefined ? '—' : String(Math.round(n)));
 
-/** Compact text for AI review and chat: one line per deal, no raw source rows. */
-export function buildAiContext(c: Consolidation, maxDeals = 250): string {
+/** Compact text for AI review and chat: one line per ОПП row, no raw source rows. */
+export function buildAiContext(c: Consolidation, maxRows = 250): string {
   const lines = [
-    'Колонки: ключ | Б24 | сделка | шифры ОПП | блоки подразделений (подразделение месяц: выручка факт/план; себестоимость факт/план; прибыль факт/план) | МК: выпуск т; металл руб; работа руб; итого руб; руб/кг | замечания системы',
+    'Строка = шифр ОПП (тип баков сделки). Колонки: ключ | месяц | ОПП | Б24 | заказчик | баки | выручка план/факт | себестоимость план/факт | прибыль план/факт | вес кг план/факт | стоимость МК факт; себестоимость МК факт (завод; сторонние) | '
+      + BLOCKS.map(b => b.label).join(', ') + ' (бюджет/факт) | БГ/штрафы | замечания системы',
   ];
-  for (const d of c.deals.slice(0, maxDeals)) {
-    const blocks = d.blocks.map(b =>
-      `${b.department} ${b.period}: выр ${r0(b.revenueFact)}/${r0(b.revenuePlan)}; себ ${r0(b.costFact)}/${r0(b.costPlan)}; приб ${r0(b.profitFact)}/${r0(b.profitPlan)}`
-    ).join('; ');
-    const mk = d.mk
-      ? `${d.mk.outputT.toFixed(1)} т; ${r0(d.mk.metalRub)}; ${r0(d.mk.workRub)}; ${r0(d.mk.totalRub)}; ${d.mk.outputT > 0 ? (d.mk.totalRub / (d.mk.outputT * 1000)).toFixed(1) : '—'}`
-      : 'нет выпуска';
-    lines.push([d.key, d.b24 ?? '—', d.name.slice(0, 80), d.opps.join(',') || '—', blocks || '—', mk, d.issues.map(i => i.code).join(',') || '—'].join(' | '));
+  for (const r of c.rows.slice(0, maxRows)) {
+    const blocks = BLOCKS.map(b => `${r0(r.blocks[b.key].plan)}/${r0(r.blocks[b.key].fact)}`).join('; ');
+    const mk = r.mk ? `${r0(r.mkValueFact)}; ${r0(r.mk.costRub)} (${r0(r.mk.own.totalRub)}; ${r0(r.mk.ext.totalRub)})` : `${r0(r.mkValueFact)}; нет выпуска`;
+    lines.push([
+      r.key, r.period ?? '—', r.opp ?? '—', r.b24 ?? '—', r.customer.slice(0, 50), r.tanks.join(', ').slice(0, 120),
+      `${r0(r.revenuePlan)}/${r0(r.revenueFact)}`, `${r0(r.costPlan)}/${r0(r.costFact)}`, `${r0(r.profitPlan)}/${r0(r.profitFact)}`,
+      `${r0(r.weightPlanKg)}/${r0(r.weightFactKg)}`, mk, blocks, r0(r.finesRub), r.issues.map(i => i.code).join(',') || '—',
+    ].join(' | '));
   }
-  if (c.deals.length > maxDeals) lines.push(`… ещё ${c.deals.length - maxDeals} сделок не показано.`);
-  if (!c.deals.length && c.productionDeals.length) {
-    lines.push('Файлов подразделений нет. Производство МК по сделкам справочника:');
-    for (const d of c.productionDeals.slice(0, maxDeals)) {
-      lines.push(`${d.key} | ${d.b24} | ${d.client.slice(0, 60)} | ${d.opps.join(',')} | ${d.mk!.outputT.toFixed(1)} т | итого ${r0(d.mk!.totalRub)}`);
+  if (c.rows.length > maxRows) lines.push(`… ещё ${c.rows.length - maxRows} строк не показано.`);
+  if (!c.rows.length && c.production.length) {
+    lines.push('Файлов подразделений нет. Производство МК по шифрам (ОПП | Б24 | заказчик | выпуск кг | себестоимость):');
+    for (const p of c.production.slice(0, maxRows)) {
+      lines.push(`${p.opp} | ${p.b24 ?? '—'} | ${p.customer.slice(0, 50)} | ${r0(p.mk.outputKg)} | ${r0(p.mk.costRub)}${p.finished ? '' : ' | незавершённое'}`);
     }
   }
   lines.push('Общие замечания: ' + (c.globalIssues.map(i => i.message).join(' ') || 'нет'));

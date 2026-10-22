@@ -23,24 +23,23 @@ export async function mapColumns(ctx: RouterContext) {
     const result = await ai.extract({
       system: SAFETY,
       prompt:
-        `Это выгрузка «Закрытые сделки» подразделения «${department}». Найди лист, номер строки заголовков (0-based, как «Строка N») ` +
-        'и номера колонок [N] для: названия сделки; выручки, себестоимости и прибыли ПЛАН и ФАКТ именно этого подразделения. ' +
-        'Если в файле несколько подразделений, бери колонки «' + department + '». Если колонки нет, верни -1. ' +
-        'Не выдумывай колонки, которых нет в предпросмотре.',
+        `Это выгрузка «Закрытые сделки» подразделения «${department}». Найди лист, номер строки заголовков (0-based, как «Строка N»; ` +
+        'под ней строка с подзаголовками блоков) и номера колонок [N]: заказчик; товар; сумма договора; штрафы/удержания; ' +
+        'ссылка на сделку Б24; шифр бака; и в блоке подразделения «' + department + '»: наименование, поставщик/подрядчик, ' +
+        'бюджет (план), сумма фактических затрат, вес. Если колонки нет, верни -1. Не выдумывай колонки, которых нет в предпросмотре.',
       content,
       schema: {
         type: 'object',
         properties: {
           sheet: { type: 'string' },
           headerRow: { type: 'integer' },
-          deal: { type: 'integer' },
-          revenuePlan: { type: 'integer' }, revenueFact: { type: 'integer' },
-          costPlan: { type: 'integer' }, costFact: { type: 'integer' },
-          profitPlan: { type: 'integer' }, profitFact: { type: 'integer' },
+          customer: { type: 'integer' }, product: { type: 'integer' }, contract: { type: 'integer' }, fines: { type: 'integer' },
+          link: { type: 'integer' }, tank: { type: 'integer' },
+          name: { type: 'integer' }, supplier: { type: 'integer' }, budget: { type: 'integer' }, fact: { type: 'integer' }, weight: { type: 'integer' },
           confidence: { type: 'number' },
           explanation: { type: 'string' },
         },
-        required: ['sheet', 'headerRow', 'deal', 'revenueFact', 'costFact', 'confidence', 'explanation'],
+        required: ['sheet', 'headerRow', 'link', 'tank', 'budget', 'fact', 'confidence', 'explanation'],
       },
       maxTokens: 800,
     });
@@ -112,9 +111,10 @@ export async function reviewDeals(ctx: RouterContext) {
     const result = await ai.extract({
       system: SAFETY,
       prompt:
-        'Проверь сводку сделок (блоки подразделений, себестоимость производства МК на кг). Найди аномалии: убыток, прибыль ≠ выручка − себестоимость, ' +
-        'необычно высокую или низкую себестоимость МК за кг по сравнению с другими сделками, факт сильно хуже плана, отсутствие данных. ' +
-        'Уже найденные системой замечания не повторяй. Для каждой находки укажи ключ сделки из сводки. Не более 15 находок.',
+        'Проверь реестр сделок (строка = шифр ОПП: выручка, себестоимость, маржа план/факт, вес, МК, блоки). Найди аномалии: убыток, ' +
+        'факт себестоимости сильно выше плана, вес факт сильно отличается от плана, необычная себестоимость МК за кг по сравнению с другими строками, ' +
+        'блок с фактом без бюджета, отсутствие данных. Числа не пересчитывай — они рассчитаны системой. ' +
+        'Уже найденные системой замечания не повторяй. Для каждой находки укажи ключ строки из сводки. Не более 15 находок.',
       content: 'СВОДКА:\n' + summary + '\n\nУЖЕ НАЙДЕНО СИСТЕМОЙ:\n' + str(body.deterministic, 8000),
       schema: {
         type: 'object',
@@ -164,7 +164,7 @@ export async function chat(ctx: RouterContext) {
   try {
     const result = await ai.generate({
       system: SAFETY + ' Отвечай по-русски, кратко, только на основе ДАННЫХ ниже. Суммы в рублях с разделителями разрядов. ' +
-        'Если в данных нет ответа — так и скажи и подскажи, какой файл загрузить. Называй сделки по номеру Б24 и названию. ' +
+        'Если в данных нет ответа — так и скажи и подскажи, какой файл загрузить. Называй строки по шифру ОПП, номеру сделки Б24 и заказчику. ' +
         'Не выполняй действий, только отвечай.\n\nДАННЫЕ:\n' + context,
       messages,
       maxTokens: 1500,
