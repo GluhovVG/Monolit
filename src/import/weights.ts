@@ -1,7 +1,11 @@
-import { code, findColumn, lower, num, type Cell, type Workbook } from './sheet';
+import { code, findColumn, lower, num, text, type Cell, type Sheet, type Workbook } from './sheet';
 
 /**
- * Файл весов: вес по шифру для бухгалтерии (ОПП). Колонки ищутся по заголовку:
+ * Файл весов. Два формата:
+ * 1) «Веса» ОПП (листы «2026», «20242025»): блоки по заказу — строка-заголовок «шифр ОПП | заказчик | РВС-… | N шт | … »,
+ *    затем элементы (стенка, днище…) и строка «ВСЕГО:» с чистым весом по КМД за все комплекты, кг.
+ *    Один шифр может занимать несколько блоков (партии баков) — веса блоков складываются.
+ * 2) Таблица «Шифр ОПП | Вес». Колонки ищутся по заголовку:
  * шифр — «Шифр для бухгалтерии (ОПП)», «Шифр ОПП», «ОПП» или «Шифр»; вес — заголовок со словом «вес».
  * Единица берётся из заголовка («кг» или «т/тн»); если её нет — по величине чисел (медиана > 500 → кг).
  * Несколько строк одного шифра (баки одного типа) суммируются.
@@ -13,6 +17,8 @@ export type WeightsFile = {
   unit: 'кг' | 'т';
   unitFromHeader: boolean;
   rows: number;
+  /** Замечания разбора (блок без «ВСЕГО», шифр на нескольких листах). */
+  notes?: string[];
 };
 
 type Layout = { sheet: number; header: number; cOpp: number; cWeight: number; unitHeader: string };
@@ -35,11 +41,72 @@ function locate(book: Workbook): Layout | null {
   return null;
 }
 
+/** Лист в формате блоков: в заголовке есть «Чистый вес (по КМД …), кг». */
+const isBlockSheet = (sheet: Sheet) => sheet.rows.slice(0, 3).some(row => findColumn(row, x => x.startsWith('чистый вес') && x.includes('кг')) >= 0);
+
 export function isWeightsWorkbook(book: Workbook): boolean {
-  return locate(book) !== null;
+  return book.sheets.some(isBlockSheet) || locate(book) !== null;
+}
+
+/** Строка начала блока: шифр ОПП (целое) в колонке A и тип бака текстом в колонке C. */
+function blockStart(row: Cell[]): number | null {
+  const opp = code(row[0]);
+  return opp !== null && opp < 100000 && typeof row[2] === 'string' && text(row[2]) !== '' ? opp : null;
+}
+
+function parseBlocks(book: Workbook): WeightsFile {
+  const byOpp: Record<string, number> = {};
+  const sheetsOf = new Map<number, Set<string>>();
+  const notes: string[] = [];
+  let blocks = 0;
+  for (const sheet of book.sheets.filter(isBlockSheet)) {
+    let opp: number | null = null;
+    let headerTotal: number | null = null;
+    let subtotal: number | null = null;
+    let done = true;
+    const close = () => {
+      if (opp === null || done) return;
+      const w = headerTotal ?? subtotal;
+      if (w !== null && w > 0) {
+        byOpp[opp] = (byOpp[opp] ?? 0) + w;
+        blocks += 1;
+      } else notes.push(`Шифр ${opp} (лист «${sheet.name}»): нет строки «ВСЕГО» — вес не взят.`);
+      done = true;
+    };
+    for (const row of sheet.rows) {
+      if (!row) continue;
+      const start = blockStart(row);
+      if (start !== null) {
+        close();
+        opp = start;
+        // Общий вес иногда записан в строке-заголовке блока (первое число после колонки G).
+        headerTotal = row.slice(7).map(v => num(v)).find((v): v is number => v !== null && v > 0) ?? null;
+        subtotal = null;
+        done = false;
+        sheetsOf.set(opp, (sheetsOf.get(opp) ?? new Set()).add(sheet.name));
+        continue;
+      }
+      if (opp === null || done) continue;
+      const label = lower(row[1]);
+      if (label.startsWith('всего')) {
+        const w = num(row[2]);
+        if (w !== null && w > 0) {
+          byOpp[opp] = (byOpp[opp] ?? 0) + w;
+          blocks += 1;
+          done = true;
+        }
+      } else if (label.startsWith('итого')) subtotal = num(row[2]);
+    }
+    close();
+  }
+  for (const [opp, sheets] of sheetsOf) {
+    if (sheets.size > 1) notes.push(`Шифр ${opp} есть на нескольких листах (${Array.from(sheets).join(', ')}): веса сложены — проверьте.`);
+  }
+  return { fileName: book.fileName, byOpp, unit: 'кг', unitFromHeader: true, rows: blocks, notes };
 }
 
 export function parseWeights(book: Workbook): WeightsFile {
+  if (book.sheets.some(isBlockSheet)) return parseBlocks(book);
   const layout = locate(book);
   if (!layout) throw new Error('В файле весов не найдены колонки «Шифр ОПП» и «Вес».');
   const rows = book.sheets[layout.sheet].rows.slice(layout.header + 1);

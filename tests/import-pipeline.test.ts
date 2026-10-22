@@ -328,3 +328,26 @@ describe('automatic checks, month close and summaries', () => {
     assert.equal(line.margin, line.profitFact! / line.revenueFact!);
   });
 });
+
+describe('weights file «Веса» in blocks by ОПП', () => {
+  it('takes «ВСЕГО» of each block and sums blocks of one code; notes a block without total', () => {
+    const book: Workbook = { fileName: 'Веса.xlsx', sheets: [{ name: '2026', rows: [
+      [null, 'Наименование', 'Чистый вес (по КМД, без напл.мет.) за общ.кол-во комплектов, кг.', 'Грязный вес, кг.'],
+      [501, 'Альфа', 'РВС-1000', '2шт', null, null, '№01/26, №02/26', 2000],
+      ['МК', 'Стенка', 1500, 1600],
+      ['ПОДРЯД', 'Ступени', 500],
+      [null, 'ИТОГО (без ПОДРЯДА):', 1500, 1600],
+      [null, 'ВСЕГО:', 2000],
+      [501, 'Альфа', 'РВС-1000', '1шт', null, null, '№03/26', 1100],
+      ['МК', 'Стенка', 1100],
+      [null, 'ВСЕГО:', 1100],
+      [502, 'Альфа', 'РВС-500', '1шт', null, null, '№04/26'],
+      ['МК', 'Стенка', 700],
+    ] }] };
+    assert.equal(detectFileKind(book), 'weights');
+    const w = parseWeights(book);
+    assert.deepEqual(w.byOpp, { '501': 3100 });
+    assert.equal(w.rows, 2);
+    assert.ok(w.notes!.some(n => n.includes('502')));
+  });
+});

@@ -131,7 +131,7 @@ function prepare(book: Workbook, kind: FileKind, base: Pending): Pending {
     const n = Object.keys(w.byOpp).length;
     return { ...base, status: n ? 'ready' : 'error', payload: w, rowCount: n,
       summary: `Веса по ${n} шифрам ОПП (единица: ${w.unit}${w.unitFromHeader ? '' : ', определена по величине чисел — проверьте'})`,
-      error: n ? undefined : 'Не найдено строк с шифром ОПП и весом.' };
+      issues: w.notes ?? [], error: n ? undefined : 'Не найдено строк с шифром ОПП и весом.' };
   }
   if (kind === 'tkp') {
     const tkp = parseTkp(book);
