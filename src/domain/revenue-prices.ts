@@ -7,6 +7,7 @@ import { priceOutliers } from './checks';
  * Расчёт цен для выручки: цена МК за тонну по шифру ОПП.
  * Стоимость МК — «Конечная стоимость для продажи план» позиций ТКП этого шифра.
  * Вес — из файла весов по шифру ОПП; если шифра там нет — «Кол-во на поставку план, кг» из ТКП.
+ * Если общий выпуск по шифру (завод + сторонние) больше этого планового веса — берётся вес выпуска.
  * Цена, ₽/т = стоимость МК / (вес, кг / 1000). Позиции ТКП сопоставляются с ОПП через «Номера заказов».
  */
 export type PriceRow = {
@@ -19,7 +20,11 @@ export type PriceRow = {
   positions: TkpPosition[];
   mkValue: number | null;
   weightKg: number | null;
-  weightSource: 'weights' | 'tkp' | null;
+  weightSource: 'weights' | 'tkp' | 'output' | null;
+  /** Плановый вес (файл весов или ТКП), кг — для сравнения с выпуском. */
+  planWeightKg: number | null;
+  /** Общий выпуск по шифру, кг. */
+  outputKg: number | null;
   /** ₽ за тонну. */
   pricePerT: number | null;
   issue: string;
@@ -27,7 +32,16 @@ export type PriceRow = {
 
 const tankLabel = (r: ReferenceRow) => (r.factoryNo && r.factoryNo !== '-' ? `${r.tankCode} №${r.factoryNo}` : r.tankCode);
 
-export function revenuePrices(tkp: readonly TkpFile[], reference: readonly ReferenceRow[], weights: WeightsFile | null): PriceRow[] {
+/** Общий выпуск по шифру ОПП, кг (завод + сторонние цеха). */
+export function outputKgByOpp(rows: ReadonlyArray<{ opp: number | null; outputT: number }>): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const r of rows) if (r.opp !== null) m.set(r.opp, (m.get(r.opp) ?? 0) + r.outputT * 1000);
+  return m;
+}
+
+export function revenuePrices(
+  tkp: readonly TkpFile[], reference: readonly ReferenceRow[], weights: WeightsFile | null, output: ReadonlyMap<number, number> = new Map(),
+): PriceRow[] {
   const byB24 = new Map<number, ReferenceRow[]>();
   for (const r of reference) if (r.b24 !== null) byB24.set(r.b24, [...(byB24.get(r.b24) ?? []), r]);
   const rows = new Map<string, PriceRow>();
@@ -41,7 +55,7 @@ export function revenuePrices(tkp: readonly TkpFile[], reference: readonly Refer
       const row = rows.get(key) ?? {
         key, opp, b24: file.b24, customer: (dealRef[0]?.client ?? '').replace(/\s+/g, ' ').trim(),
         tanks: opp !== null ? Array.from(new Set(dealRef.filter(r => r.opp === opp).map(tankLabel))) : [],
-        positions: [], mkValue: null, weightKg: null, weightSource: null, pricePerT: null,
+        positions: [], mkValue: null, weightKg: null, weightSource: null, planWeightKg: null, outputKg: null, pricePerT: null,
         issue: opp !== null ? '' : !dealRef.length
           ? `Сделки ${file.b24 ?? '—'} нет в «Номерах заказов».`
           : `Позиция не сопоставлена с ОПП${candidates.length ? ` (подходят ${candidates.join(', ')})` : ''}.`,
@@ -61,6 +75,14 @@ export function revenuePrices(tkp: readonly TkpFile[], reference: readonly Refer
     } else if (tkpWeights.length) {
       row.weightKg = tkpWeights.reduce((s, v) => s + v, 0);
       row.weightSource = 'tkp';
+    }
+    row.planWeightKg = row.weightKg;
+    const out = row.opp !== null ? output.get(row.opp) : undefined;
+    row.outputKg = out ?? null;
+    // Выпуск больше планового веса — цена считается на фактический вес выпуска.
+    if (out !== undefined && out > 0 && (row.weightKg === null || out > row.weightKg)) {
+      row.weightKg = out;
+      row.weightSource = 'output';
     }
     row.pricePerT = row.mkValue !== null && row.weightKg ? row.mkValue / (row.weightKg / 1000) : null;
     if (!row.tanks.length) row.tanks = row.positions.map(p => p.name);

@@ -6,7 +6,7 @@ import {
   type Consolidation, type DealIssue, type OppMk, type OppRow, type ProductionOpp, type WorkspaceData,
 } from '../domain/consolidate';
 import type { MkLine } from '../domain/mk-production';
-import { revenuePrices, type PriceRow } from '../domain/revenue-prices';
+import { outputKgByOpp, revenuePrices, type PriceRow } from '../domain/revenue-prices';
 import { outputFinres, outputTotals, type OutputRow } from '../domain/output-finres';
 import {
   blockTotals, departmentFromFileName, detectDepartmentMapping, extractDepartmentDeals, sanitizeMapping, sheetPreview,
@@ -925,19 +925,21 @@ function GoogleSheetsPanel({ sources, onChanged }: { sources: SheetSource[]; onC
 
 /* ───────────────────────── Prices for revenue ───────────────────────── */
 
+const weightSourceLabel = (r: PriceRow) => (r.weightSource === 'weights' ? 'файл весов' : r.weightSource === 'tkp' ? 'ТКП' : r.weightSource === 'output' ? 'выпуск (больше плана)' : '');
+
 /** Таблица цен для выгрузки. */
 function pricesMatrix(rows: PriceRow[]): Matrix {
   return {
-    head: ['Шифр ОПП', 'Заказчик', 'РВС', 'Б24', 'Стоимость МК, ₽', 'Вес, т', 'Источник веса', 'Цена, ₽/т', 'Замечание'],
+    head: ['Шифр ОПП', 'Заказчик', 'РВС', 'Б24', 'Стоимость МК, ₽', 'Вес в расчёте, т', 'Источник веса', 'Плановый вес, т', 'Выпуск, т', 'Цена, ₽/т', 'Замечание'],
     rows: rows.map(r => [r.opp, r.customer, r.tanks.join('; '), r.b24, r.mkValue, r.weightKg === null ? null : r.weightKg / 1000,
-      r.weightSource === 'weights' ? 'файл весов' : r.weightSource === 'tkp' ? 'ТКП' : '', r.pricePerT, r.issue]),
-    widths: [10, 30, 45, 8, 16, 10, 12, 14, 50],
+      weightSourceLabel(r), r.planWeightKg === null ? null : r.planWeightKg / 1000, r.outputKg === null ? null : r.outputKg / 1000, r.pricePerT, r.issue]),
+    widths: [10, 30, 45, 8, 16, 12, 14, 12, 12, 14, 50],
   };
 }
 
 function PricesPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
   const [search, setSearch] = useState('');
-  const all = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights), [data, weights]);
+  const all = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])])), [data, weights]);
   const rows = all.filter(r => `${r.opp ?? ''} ${r.b24 ?? ''} ${r.customer} ${r.tanks.join(' ')}`.toLowerCase().includes(search.toLowerCase()));
   const value = rows.reduce((s, r) => s + (r.mkValue ?? 0), 0);
   const weightKg = rows.reduce((s, r) => s + (r.weightKg ?? 0), 0);
@@ -945,7 +947,7 @@ function PricesPage({ data, weights }: { data: WorkspaceData; weights: WeightsFi
   return (
     <>
       <Heading eyebrow="ВЫРУЧКА МК" title="Расчёт цен для выручки"
-        text="Цена за тонну = стоимость МК из «Расчёта ТКП» / вес. Вес берётся из файла весов по шифру ОПП, а если шифра там нет — плановый вес из ТКП. Позиции ТКП сопоставляются с шифрами через «Номера заказов»."
+        text="Цена за тонну = стоимость МК из «Расчёта ТКП» / вес. Вес берётся из файла весов (или Google Таблицы весов) по шифру ОПП, если шифра там нет — плановый вес из ТКП. Если общий выпуск по шифру больше планового веса — берётся вес выпуска. Позиции ТКП сопоставляются с шифрами через «Номера заказов»."
         actions={<>
           <button className="btn-secondary" disabled={!rows.length} onClick={() => void downloadXlsx(pricesMatrix(rows), 'Цены для выручки', 'MONOLITH-Ceny-dlya-vyruchki.xlsx')}><Download size={16} /> Excel</button>
           <button className="btn-secondary" disabled={!rows.length} onClick={() => downloadCsv(pricesMatrix(rows), 'MONOLITH-Ceny-dlya-vyruchki.csv')}><Download size={16} /> CSV</button>
@@ -966,7 +968,7 @@ function PricesPage({ data, weights }: { data: WorkspaceData; weights: WeightsFi
               <td><strong>{r.opp ?? '—'}</strong></td><td>{r.customer || '—'}</td>
               <td className="tanks-cell"><small>{r.tanks.join('; ')}</small>{r.issue && <small className="login-error">{r.issue}</small>}</td>
               <td>{r.b24 ?? '—'}</td><td>{money(r.mkValue)}</td>
-              <td>{tonne(r.weightKg)}<small>{r.weightSource === 'weights' ? 'файл весов' : r.weightSource === 'tkp' ? 'из ТКП' : ''}</small></td>
+              <td>{tonne(r.weightKg)}<small>{weightSourceLabel(r)}{r.weightSource === 'output' && r.planWeightKg !== null ? ` · план ${tonne(r.planWeightKg)} т` : ''}</small></td>
               <td><strong>{money(r.pricePerT)}</strong></td>
             </tr>
           ))}
@@ -1004,7 +1006,7 @@ function OutputTotalsRow({ label, rows }: { label: string; rows: OutputRow[] }) 
 
 /** Финрез по выпуску завода по месяцам: цены из «Расчёта цен для выручки» × вес выпуска по шифрам. */
 function OutputPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
-  const prices = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights), [data, weights]);
+  const prices = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])])), [data, weights]);
   const all = useMemo(() => outputFinres(data.prodOwn ?? [], prices, data.rates, data.reference ?? []), [data, prices]);
   const months = useMemo(() => Array.from(new Set(all.map(r => r.month).filter((m): m is string => m !== null))).sort(), [all]);
   const [month, setMonth] = useState<string>('');

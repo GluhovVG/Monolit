@@ -376,3 +376,21 @@ describe('financial result by output (monthly)', () => {
     assert.equal(t.margin, t.result! / t.revenue!);
   });
 });
+
+describe('price weight priority', () => {
+  it('weights file → ТКП; output weight wins when it is larger than the plan', async () => {
+    const { outputKgByOpp } = await import('../src/domain/revenue-prices.ts');
+    const ref = parseReference(reference);
+    const t = parseTkp(tkpBook); // 501: 600 000 ₽, plan 3 000 kg in ТКП
+    const out = outputKgByOpp([{ opp: 501, outputT: 2 }, { opp: 501, outputT: 1.5 }, { opp: 502, outputT: 1 }]);
+    const rows = revenuePrices([t], ref, null, out);
+    const r501 = rows.find(r => r.opp === 501)!;
+    assert.equal(r501.outputKg, 3500);
+    assert.equal(r501.weightSource, 'output');
+    assert.equal(r501.planWeightKg, 3000);
+    assert.equal(r501.pricePerT, 600000 / 3.5);
+    const r502 = rows.find(r => r.opp === 502)!; // output 1 000 kg < plan 4 000 kg → plan stays
+    assert.equal(r502.weightSource, 'tkp');
+    assert.equal(r502.pricePerT, 200000 / 4);
+  });
+});
