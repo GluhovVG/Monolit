@@ -481,7 +481,7 @@ function RowDetails({ r }: { r: OppRow }) {
       <h3>Блоки подразделений</h3>
       {blockLines.length ? (
         <div className="table-wrap"><table>
-          <thead><tr><th>Блок</th><th>Строка файла</th><th>Бак</th><th>Наименование</th><th>Поставщик</th><th>Бюджет</th><th>Факт</th><th>Доля</th><th>Источник</th></tr></thead>
+          <thead><tr><th>Блок</th><th>Строка файла</th><th>Бак</th><th>Наименование</th><th>Поставщик</th><th>Выручка (бюджет)</th><th>Себестоимость (факт)</th><th>Доля</th><th>Источник</th></tr></thead>
           <tbody>{blockLines.map((l, k) => (
             <tr key={k}>
               <td>{l.label}</td><td>{l.block}</td><td><small>{l.tank || '—'}</small></td><td>{l.name || '—'}{l.note && <small>{l.note}</small>}</td><td>{l.supplier || '—'}</td>
@@ -512,7 +512,7 @@ function exportRegister(rows: OppRow[]) {
     'Маржа план', 'Маржа факт', 'Вес план, кг', 'Вес факт, кг', 'Стоимость МК план', 'Стоимость МК факт', 'Цена за 1 кг', 'Себестоимость МК план',
     'Себестоимость МК факт', 'Затраты завода', 'Металл (завод)', 'Без сырья (завод)', 'Выпуск завода, кг', 'Затраты сторонние', 'Металл (сторонние)',
     'Работа сторонних по расценке', 'Частичное переразмещение (услуги)', 'Выпуск сторонних, кг', 'Маржа МК план', 'Маржа МК факт',
-    ...BLOCKS.flatMap(b => [`${b.label} бюджет`, `${b.label} факт`]), 'БГ/штрафы', 'Замечания'];
+    ...BLOCKS.flatMap(b => [`${b.label} выручка (бюджет)`, `${b.label} себестоимость (факт)`]), 'БГ/штрафы', 'Замечания'];
   const lines = rows.map(r => [
     r.period, r.opp, r.customer, r.tanks.join('; '), r.b24, r.revenuePlan, r.revenueFact, r.costPlan, r.costFact, r.profitPlan, r.profitFact,
     r.weightPlanKg, r.weightFactKg, r.mkValuePlan, r.mkValueFact, r.priceKg, r.mkCostPlan, r.mk?.costRub ?? null,
@@ -596,7 +596,7 @@ function RegisterPage({ c, data, onChanged }: { c: Consolidation; data: Workspac
             <th>План</th><th>Факт</th><th>∆</th><th>План</th><th>Факт</th><th>∆</th><th>План</th><th>Факт</th><th>∆</th>
             <th>План</th><th>Факт</th><th>План</th><th>Факт</th><th>План</th><th>Факт</th><th>∆</th>
             <th>Всего</th><th>Металл</th><th>Выпуск, кг</th><th>Всего</th><th>Металл</th><th>Работа + перераз.</th>
-            {BLOCKS.map(b => <Fragment key={b.key}><th>Бюджет</th><th>Факт</th></Fragment>)}
+            {BLOCKS.map(b => <Fragment key={b.key}><th title="Бюджет, руб с НДС">Выручка</th><th title="Сумма фактических затрат, руб с НДС">Себест.</th></Fragment>)}
           </tr>
         </thead>
         <tbody>
@@ -639,7 +639,7 @@ function RegisterPage({ c, data, onChanged }: { c: Consolidation; data: Workspac
           })}
         </tbody>
       </table></div>
-      <p className="register-note"><small>Выручка = стоимость МК (ТКП) + бюджеты блоков. Полная себестоимость факт = себестоимость МК + факт блоков + БГ/штрафы.
+      <p className="register-note"><small>Блоки подразделений: выручка = «Бюджет, руб с НДС», себестоимость = «Сумма фактических затрат, руб с НДС»; «Переразмещения (частичные)» Комплектации — затраты сторонних подрядчиков без расценки, они входят в себестоимость МК. Выручка = стоимость МК (ТКП) + бюджеты блоков. Полная себестоимость факт = себестоимость МК + факт блоков + БГ/штрафы.
         Себестоимость МК = списание «Сумма всего с НДС» + выпуск × коэффициент (завод — коэффициент месяца, подрядчик — расценка; без расценки — «Переразмещения (частичные)»).
         Суммы сделки без привязки к баку распределяются по шифрам пропорционально стоимости МК из ТКП. ОМТС — справочно, в себестоимость не входит.</small></p>
       <MatchReview kind="deal" title="Сделки без ссылки на Б24" items={c.unmatchedDealNames} candidates={refCandidates} onSaved={onChanged}
