@@ -1,6 +1,8 @@
 import { ai, router, json, error, requireAuth, withScopes } from '@appdeploy/sdk';
 import { requireAccessList, loadAllowedEmails } from './access';
 import { SOURCE_ROWS } from './source-2025';
+import { saveUpload, listUploads, deleteUpload, listAliases, saveAliases, deleteAlias } from './uploads';
+import { mapColumns, matchNames, reviewDeals, chat } from './ai-tools';
 
 const protectedRoute = [requireAuth(), withScopes('email'), requireAccessList()];
 
@@ -33,6 +35,16 @@ export const handler = router({
     ...protectedRoute,
     async () => json({ rows: SOURCE_ROWS }),
   ],
+  'GET /api/uploads': [...protectedRoute, listUploads],
+  'POST /api/uploads': [...protectedRoute, saveUpload],
+  'DELETE /api/uploads/:id': [...protectedRoute, deleteUpload],
+  'GET /api/aliases': [...protectedRoute, listAliases],
+  'POST /api/aliases': [...protectedRoute, saveAliases],
+  'DELETE /api/aliases/:id': [...protectedRoute, deleteAlias],
+  'POST /api/ai/map-columns': [...protectedRoute, mapColumns],
+  'POST /api/ai/match': [...protectedRoute, matchNames],
+  'POST /api/ai/review-deals': [...protectedRoute, reviewDeals],
+  'POST /api/ai/chat': [...protectedRoute, chat],
   'POST /api/review-change': [
     ...protectedRoute,
     async ({ body }) => {

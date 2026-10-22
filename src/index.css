@@ -1655,3 +1655,90 @@ td small {
 .login-error {
   color: #b42318;
 }
+
+/* Uploads, register, MK, assistant */
+.upload-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 28px 16px;
+  margin-bottom: 20px;
+  border: 2px dashed #b9c4d3;
+  border-radius: 14px;
+  background: #ffffff;
+  text-align: center;
+  cursor: pointer;
+}
+.upload-drop small {
+  color: #5b6b80;
+}
+.upload-drop-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+.upload-card {
+  border-top: 1px solid #e3e8ef;
+  padding: 14px 0;
+}
+.upload-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.upload-card-head strong {
+  flex: 1;
+  min-width: 200px;
+  word-break: break-word;
+}
+.ai-note {
+  color: #4338ca;
+}
+.details-row > td {
+  background: #f8fafc;
+  padding: 16px;
+}
+.details-row h3 {
+  margin: 12px 0 8px;
+  font-size: 15px;
+}
+.mk-lines small,
+td small {
+  display: block;
+  color: #5b6b80;
+}
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 420px;
+  overflow-y: auto;
+  margin: 12px 0;
+}
+.chat-msg {
+  padding: 10px 14px;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  max-width: 85%;
+  line-height: 1.5;
+}
+.chat-msg.user {
+  align-self: flex-end;
+  background: #2563eb;
+  color: #ffffff;
+}
+.chat-msg.assistant {
+  align-self: flex-start;
+  background: #f1f5f9;
+  color: #172333;
+}
+.chat-input {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.chat-input textarea {
+  flex: 1;
+  min-width: 0;
+}

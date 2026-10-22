@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, auth } from '@appdeploy/client';
+import { Operations, type OperationsPage } from './features/Operations';
 import { DEFAULT_GENERAL_PARAMETERS, checkFinancialRegister, financialTotals, type GeneralParameters } from './domain/financial-controls';
 import { buildAccountingCsv } from './domain/finance-export';
 import {
@@ -27,6 +28,10 @@ import {
   LogIn,
   LogOut,
   Lock,
+  Upload,
+  Factory,
+  Table2,
+  Sparkles,
 } from 'lucide-react';
 
 type Deal = AccountingDeal;
@@ -35,6 +40,7 @@ const money = (n: number) =>
 const pct = (n: number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(n) + '%';
 const periodOptions = periods;
+const OPERATIONS_PAGES: OperationsPage[] = ['uploads', 'register', 'production', 'assistant'];
 /** Russian plural: plural(5, ['сделка', 'сделки', 'сделок']) → 'сделок'. */
 const plural = (n: number, forms: [string, string, string]) => {
   const mod10 = n % 10;
@@ -213,7 +219,7 @@ function Workspace({
   userEmail: string | null;
   onSignOut: () => void;
 }) {
-  const [page, setPage] = useState('dashboard');
+  const [page, setPage] = useState('register');
   const [period, setPeriod] = useState('2025');
   const [generalParameters, setGeneralParameters] = useState<GeneralParameters>(DEFAULT_GENERAL_PARAMETERS);
   const periodDeals = useMemo(() => dealsForPeriod(accountingDeals, period), [accountingDeals, period]);
@@ -331,9 +337,13 @@ function Workspace({
     }
   };
   const nav = [
-    { id: 'dashboard', label: 'Дашборд', icon: LayoutDashboard },
-    { id: 'deals', label: 'Сделки', icon: FileSpreadsheet },
-    { id: 'checks', label: 'Проверки ИИ', icon: BrainCircuit },
+    { id: 'uploads', label: 'Загрузка файлов', icon: Upload },
+    { id: 'register', label: 'Реестр сделок', icon: Table2 },
+    { id: 'production', label: 'Производство МК', icon: Factory },
+    { id: 'assistant', label: 'ИИ-помощник', icon: Sparkles },
+    { id: 'dashboard', label: 'Дашборд 2025', icon: LayoutDashboard },
+    { id: 'deals', label: 'Учёт 2025', icon: FileSpreadsheet },
+    { id: 'checks', label: 'Проверки 2025', icon: BrainCircuit },
     { id: 'regulation', label: 'Положение', icon: FileText },
     { id: 'settings', label: 'Настройки', icon: SlidersHorizontal },
   ];
@@ -430,6 +440,7 @@ function Workspace({
               </button>
             </div>
           )}
+          {OPERATIONS_PAGES.includes(page as OperationsPage) && <Operations page={page as OperationsPage} />}
           {page === 'dashboard' && (
             <>
               <div className="page-heading">

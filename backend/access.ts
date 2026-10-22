@@ -14,10 +14,15 @@ import { parseEmailList } from './email-list';
  */
 export const ACCESS_SECRET = 'ALLOWED_EMAILS';
 
+/** App owner: always on the access list, so the owner can never be locked out. */
+export const OWNER_EMAILS = ['gluhovvg@gmail.com'];
+
 export async function loadAllowedEmails(): Promise<string[]> {
   const names = await secrets.listSecretNames();
-  if (!names.includes(ACCESS_SECRET)) return [];
-  return parseEmailList(await secrets.readSecret(ACCESS_SECRET));
+  const extra = names.includes(ACCESS_SECRET)
+    ? parseEmailList(await secrets.readSecret(ACCESS_SECRET))
+    : [];
+  return Array.from(new Set([...OWNER_EMAILS, ...extra]));
 }
 
 /** Use after requireAuth(): only users on the access list pass. */
