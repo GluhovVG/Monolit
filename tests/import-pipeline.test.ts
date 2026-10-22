@@ -117,6 +117,25 @@ describe('import: file detection and parsing', () => {
     assert.equal(parseProduction(ext).rows.length, 3);
     assert.equal(parseProduction(own).periodTo, '19.10.2026');
   });
+  it('drops order subtotal lines whose merged order name spilled into «Месяц» / «Цех»', () => {
+    const spilled: Workbook = { fileName: 'Выпуск СЗ.xlsx', sheets: [{ name: 'Лист_1', rows: [
+      ...header('СЗ по месяцам'),
+      ['Шифр', 'Заказчик', null, null, 'Заказ', null, 'Юрлицо', 'Месяц'],
+      [688, 'Альфа', null, null, 'РВС-200-Альфа/25 (688)', null, 'РВС-200-Альфа/25 (688)', 'РВС-200-Альфа/25 (688)', 19.12, 19, 2800000, 2800000],
+      [688, 'Альфа', null, null, 'РВС-200-Альфа/25 (688)', null, 'СЗ КВОиТ', 2026.01, 7.848, 7.8, 476330, 476330],
+      [688, 'Альфа', null, null, 'РВС-200-Альфа/25 (688)', null, 'СЗ КВОиТ', 2026.03, 11.272, 11.2, 912261, 912261],
+    ] }] };
+    const rows = parseProduction(spilled).rows;
+    assert.equal(rows.length, 2);
+    assert.equal(Math.round(rows.reduce((s, r) => s + r.outputT, 0) * 1000), 19120);
+    const extSpilled: Workbook = { fileName: 'Выпуск сторонние.xlsx', sheets: [{ name: 'Лист_1', rows: [
+      ...header('заказы-сторонние цеха'),
+      ['Шифр', 'Заказчик', null, null, 'Заказ', null, null, 'Цех'],
+      [688, 'Альфа', null, null, 'РВС-200-Альфа/25 (688)', null, null, 'РВС-200-Альфа/25 (688)', 0.52, null, 0, 0],
+      [688, 'Альфа', null, null, 'РВС-200-Альфа/25 (688)', null, null, 'Промтех', 0.52, null, 0, 0],
+    ] }] };
+    assert.deepEqual(parseProduction(extSpilled).rows.map(r => r.workshop), ['Промтех']);
+  });
   it('parses department file name and the blocks owned by the department', () => {
     assert.deepEqual(departmentFromFileName('Закрытые сделки Проектирование февраль.xlsx', 2026), { department: 'Проектирование', period: '2026-02' });
     assert.deepEqual(departmentFromFileName('Закрытые сделки СМР октябрь 2025.xlsx', 2026), { department: 'СМР', period: '2025-10' });

@@ -16,6 +16,18 @@ export type ProductionRow = {
 };
 export type ProductionReport = { kind: ProductionKind; periodFrom: string; periodTo: string; rows: ProductionRow[] };
 
+/**
+ * Order subtotal line («РВС-200-Алроса/25 (688)» = 19,12 т): the total of the detail lines below it.
+ * When the order name is a merged cell it may spill into «Месяц» / «Цех»: own plant subtotal has no
+ * month and no legal entity; external subtotal has the order name instead of a workshop.
+ */
+export function isSubtotalRow(kind: ProductionKind, row: Pick<ProductionRow, 'order' | 'month' | 'workshop'>): boolean {
+  const order = row.order.trim().toLowerCase();
+  const workshop = row.workshop.trim().toLowerCase();
+  if (kind === 'own') return row.month === null && (workshop === '' || workshop === order);
+  return workshop === '' || workshop === order;
+}
+
 export function productionKind(book: Workbook): ProductionKind | null {
   const head = book.sheets[0]?.rows.slice(0, 4).map(row => row.map(lower).join(' ')).join(' ') ?? '';
   if (head.includes('отчет по выпуску') && head.includes('сторонние')) return 'external';
@@ -51,7 +63,7 @@ export function parseProduction(book: Workbook): ProductionReport {
   for (const row of rows.slice(h + 2)) {
     if (!row || text(row[cDetail]) === '') continue; // order subtotal or empty line
     if (lower(row[0]) === 'итого') continue;
-    result.push({
+    const line: ProductionRow = {
       opp: code(row[cOpp]),
       order: text(row[cOrder]),
       month: kind === 'own' ? periodFromNumber(row[cDetail]) : null,
@@ -60,7 +72,9 @@ export function parseProduction(book: Workbook): ProductionReport {
       metalT: num(row[cMetalT]) ?? 0,
       metalRub: num(row[cMetal]) ?? 0,
       totalRub: num(row[cTotal]) ?? 0,
-    });
+    };
+    if (isSubtotalRow(kind, line)) continue;
+    result.push(line);
   }
   return { kind, periodFrom, periodTo, rows: result };
 }

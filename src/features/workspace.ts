@@ -1,6 +1,6 @@
 import { api } from '@appdeploy/client';
 import type { DepartmentFile } from '../import/department';
-import type { ProductionRow } from '../import/production';
+import { isSubtotalRow, type ProductionRow } from '../import/production';
 import type { Rates } from '../import/rates';
 import type { ReferenceRow } from '../import/reference';
 import { BLOCKS, type Consolidation, type WorkspaceData } from '../domain/consolidate';
@@ -41,8 +41,9 @@ export async function loadWorkspace(): Promise<{ data: WorkspaceData; uploads: U
     if (!p) continue;
     if (item.kind === 'reference') data.reference = unpackReference((p.rows as RefTuple[]) ?? []);
     if (item.kind === 'rates') data.rates = p as unknown as Rates;
-    if (item.kind === 'prod_own') data.prodOwn = unpackProduction((p.rows as ProdTuple[]) ?? []);
-    if (item.kind === 'prod_ext') data.prodExt = unpackProduction((p.rows as ProdTuple[]) ?? []);
+    // Files saved earlier may contain order subtotal lines: they are dropped here, otherwise output is counted twice.
+    if (item.kind === 'prod_own') data.prodOwn = unpackProduction((p.rows as ProdTuple[]) ?? []).filter(r => !isSubtotalRow('own', r));
+    if (item.kind === 'prod_ext') data.prodExt = unpackProduction((p.rows as ProdTuple[]) ?? []).filter(r => !isSubtotalRow('external', r));
     // Files saved by an earlier version have no cost lines: they must be uploaded again.
     if (item.kind === 'department' && Array.isArray(p.deals) && (p.deals as Array<{ lines?: unknown }>).every(d => Array.isArray(d.lines))) {
       data.departments.push(p as unknown as DepartmentFile);

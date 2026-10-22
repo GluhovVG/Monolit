@@ -393,7 +393,7 @@ export function consolidate(data: WorkspaceData): Consolidation {
       }
       const row: OppRow = {
         key: `${acc.key}|${opp ?? '—'}`, opp, b24: acc.b24, customer: acc.customer, product: acc.product,
-        tanks: (opp !== null ? dealRef.filter(r => r.opp === opp) : dealRef).map(tankLabel),
+        tanks: Array.from(new Set((opp !== null ? dealRef.filter(r => r.opp === opp) : dealRef).map(tankLabel))),
         period, share, tkp: positions, weightPlanKg, mkValuePlan, mkValueFact, mkCostPlan, blocks, omts, finesRub,
         contractShareRub: contract !== null ? contract * share : null, mk,
         revenuePlan, revenueFact, costPlan, costFact,
@@ -422,7 +422,7 @@ export function consolidate(data: WorkspaceData): Consolidation {
   const production: ProductionOpp[] = Array.from(linesByOpp.entries()).map(([opp, lines]) => {
     const refRows = refByOpp.get(opp) ?? [];
     return {
-      opp, b24: refRows[0]?.b24 ?? null, customer: refRows[0]?.client ?? '', tanks: refRows.map(tankLabel),
+      opp, b24: refRows[0]?.b24 ?? null, customer: refRows[0]?.client ?? '', tanks: Array.from(new Set(refRows.map(tankLabel))),
       finished: refRows.length > 0, mk: buildMk(lines, realloc.get(opp) ?? [], data.contractorAliases),
     };
   }).sort((a, b) => b.mk.costRub - a.mk.costRub);
