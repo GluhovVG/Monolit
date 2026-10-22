@@ -533,7 +533,7 @@ function exportRegister(rows: OppRow[]) {
     r.mkProfitPlan, r.mkProfitFact, ...BLOCKS.flatMap(b => [r.blocks[b.key].plan, r.blocks[b.key].fact]), r.finesRub,
     r.issues.map(i => i.message).join(' | '),
   ].map(csvCell).join(';'));
-  const csv = '﻿' + [head.map(csvCell).join(';'), ...lines].join('\r\n');
+  const csv = '\ufeff' + [head.map(csvCell).join(';'), ...lines].join('\r\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
   const a = document.createElement('a');
   a.href = url;
@@ -888,7 +888,7 @@ function exportPrices(rows: PriceRow[]) {
   const head = ['Шифр ОПП', 'Заказчик', 'РВС', 'Б24', 'Стоимость МК, ₽', 'Вес, т', 'Источник веса', 'Цена, ₽/т', 'Замечание'];
   const lines = rows.map(r => [r.opp, r.customer, r.tanks.join('; '), r.b24, r.mkValue, r.weightKg === null ? null : r.weightKg / 1000,
     r.weightSource === 'weights' ? 'файл весов' : r.weightSource === 'tkp' ? 'ТКП' : '', r.pricePerT, r.issue].map(csvCell).join(';'));
-  const csv = '﻿' + [head.map(csvCell).join(';'), ...lines].join('\r\n');
+  const csv = '\ufeff' + [head.map(csvCell).join(';'), ...lines].join('\r\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
   const a = document.createElement('a');
   a.href = url;
