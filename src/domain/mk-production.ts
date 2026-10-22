@@ -73,16 +73,13 @@ export function computeMkLines(
     lines.push({
       source: 'external', opp: row.opp, order: row.order, month: null, workshop: row.workshop.trim(),
       outputT: row.outputT, metalRub: row.totalRub, rate, workRub, totalRub: row.totalRub + workRub,
-      note: nonProduction ? 'передача на склад, работа не начисляется' : rate === null ? 'нет расценки подрядчика' : '',
+      note: nonProduction ? 'передача на склад, работа не начисляется' : rate === null ? 'работа — по переразмещению из Комплектации' : '',
     });
   }
   const issues: MkIssue[] = [];
   if (!rates) issues.push({ level: 'blocker', message: 'Не загружен файл «Расценки»: стоимость работы не рассчитана.' });
   if (missingMonths.size) {
     issues.push({ level: 'blocker', message: 'Нет коэффициента СЗ за: ' + Array.from(missingMonths).sort().join(', ') + '.' });
-  }
-  for (const [name, tonnes] of missingContractors) {
-    issues.push({ level: 'warning', message: `Нет расценки для «${name}» (выпуск ${tonnes.toFixed(3)} т): стоимость работ берётся из «Переразмещения (частичные)» Комплектации.` });
   }
   return { lines, issues, missingContractors: Array.from(missingContractors.keys()).sort() };
 }

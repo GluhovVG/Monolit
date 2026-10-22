@@ -5,10 +5,11 @@ import type { Rates } from '../import/rates';
 import type { ReferenceRow } from '../import/reference';
 import { BLOCKS, type Consolidation, type WorkspaceData } from '../domain/consolidate';
 import type { TkpFile } from '../import/tkp';
+import type { WeightsFile } from '../import/weights';
 
 export type UploadMeta = {
   id: string;
-  kind: 'reference' | 'rates' | 'prod_own' | 'prod_ext' | 'department' | 'tkp';
+  kind: 'reference' | 'rates' | 'prod_own' | 'prod_ext' | 'department' | 'tkp' | 'weights';
   fileName: string;
   department: string;
   period: string;
@@ -31,8 +32,12 @@ const unpackReference = (rows: RefTuple[]): ReferenceRow[] =>
 const unpackProduction = (rows: ProdTuple[]): ProductionRow[] =>
   rows.map(([opp, order, month, workshop, outputT, metalT, metalRub, totalRub]) => ({ opp, order, month, workshop, outputT, metalT, metalRub, totalRub }));
 
-export async function loadWorkspace(): Promise<{ data: WorkspaceData; uploads: UploadMeta[]; aliases: Alias[] }> {
-  const [u, a] = await Promise.all([api.get('/api/uploads'), api.get('/api/aliases')]);
+export type SheetSource = { kind: 'reference' | 'weights'; url: string; updatedBy: string; updatedAt: number };
+
+export async function loadWorkspace(): Promise<{ data: WorkspaceData; uploads: UploadMeta[]; aliases: Alias[]; weights: WeightsFile | null; sources: SheetSource[] }> {
+  const [u, a, s] = await Promise.all([api.get('/api/uploads'), api.get('/api/aliases'), api.get('/api/sources')]);
+  const sources = ((s.data as { sources?: SheetSource[] }).sources ?? []);
+  let weights: WeightsFile | null = null;
   const raw = ((u.data as { uploads?: Array<UploadMeta & { payload: unknown }> }).uploads ?? []);
   const aliases = ((a.data as { aliases?: Alias[] }).aliases ?? []);
   const data: WorkspaceData = { reference: null, rates: null, prodOwn: null, prodExt: null, departments: [], tkp: [], dealAliases: {}, contractorAliases: {} };
@@ -49,13 +54,14 @@ export async function loadWorkspace(): Promise<{ data: WorkspaceData; uploads: U
       data.departments.push(p as unknown as DepartmentFile);
     }
     if (item.kind === 'tkp') data.tkp.push(p as unknown as TkpFile);
+    if (item.kind === 'weights') weights = p as unknown as WeightsFile;
   }
   for (const al of aliases) {
     if (al.kind === 'deal' && typeof al.to === 'number') data.dealAliases[al.from] = al.to;
     if (al.kind === 'contractor' && typeof al.to === 'string') data.contractorAliases[al.from] = al.to;
   }
   const uploads = raw.map(({ payload: _payload, ...meta }) => meta);
-  return { data, uploads, aliases };
+  return { data, uploads, aliases, weights, sources };
 }
 
 const r0 = (n: number | null | undefined) => (n === null || n === undefined ? '—' : String(Math.round(n)));

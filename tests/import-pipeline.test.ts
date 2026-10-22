@@ -9,6 +9,8 @@ import { b24FromTkpFileName, matchPositionOpp, parseTkp } from '../src/import/tk
 import { normalizeName, periodFromNumber } from '../src/import/sheet.ts';
 import { computeMkLines } from '../src/domain/mk-production.ts';
 import { consolidate, resolveTankOpp, sameContractor } from '../src/domain/consolidate.ts';
+import { revenuePrices } from '../src/domain/revenue-prices.ts';
+import { parseWeights } from '../src/import/weights.ts';
 import type { Workbook } from '../src/import/sheet.ts';
 
 const reference: Workbook = { fileName: 'Номера заказов.xlsx', sheets: [{ name: 'Текущие', rows: [
@@ -192,7 +194,7 @@ describe('import: file detection and parsing', () => {
 
 describe('MK production cost', () => {
   it('metal + output × 1000 × monthly coefficient / contractor rate', () => {
-    const { lines, issues } = computeMkLines(parseProduction(own).rows, parseProduction(ext).rows, parseRates(rates));
+    const { lines, issues, missingContractors } = computeMkLines(parseProduction(own).rows, parseProduction(ext).rows, parseRates(rates));
     const jan = lines.find(l => l.month === '2026-01')!;
     assert.equal(jan.workRub, 2 * 1000 * 50);
     assert.equal(jan.totalRub, 200000 + 100000);
@@ -201,8 +203,9 @@ describe('MK production cost', () => {
     const stock = lines.find(l => l.workshop.includes('Склад'))!;
     assert.equal(stock.workRub, 0);
     assert.equal(stock.rate, 0);
-    assert.ok(issues.some(i => i.message.includes('Промтех')));
-    assert.ok(!issues.some(i => i.message.includes('Склад')));
+    // A contractor without a rate is listed for matching, but is not a warning: its cost comes from reallocations.
+    assert.deepEqual(missingContractors, ['Промтех']);
+    assert.ok(!issues.some(i => i.message.includes('Промтех') || i.message.includes('Склад')));
   });
   it('uses a confirmed alias for a contractor without an exact rate', () => {
     const { lines } = computeMkLines([], parseProduction(ext).rows, parseRates(rates), { 'промтех': 'опора' });
@@ -260,5 +263,35 @@ describe('register by ОПП (sheet «Сделки»)', () => {
     assert.ok(c.rows.find(r => r.opp === 501)!.issues.some(i => i.code === 'DUPLICATE_BLOCK'));
     assert.deepEqual(c.production.map(p => p.opp).sort(), [501, 502]);
     assert.ok(c.production.every(p => p.finished));
+  });
+});
+
+describe('prices for revenue (MK value / weight)', () => {
+  const weightsBook = (header: string, value: number): Workbook => ({ fileName: 'Веса.xlsx', sheets: [{ name: 'Веса', rows: [
+    ['Шифр для бухгалтерии (ОПП)', 'Заказчик', header], [501, 'Альфа', value], [501, 'Альфа', value],
+  ] }] });
+  it('reads weights by ОПП in kg or tonnes and sums tanks of one code', () => {
+    assert.equal(detectFileKind(weightsBook('Вес, кг', 1500)), 'weights');
+    assert.deepEqual(parseWeights(weightsBook('Вес, кг', 1500)).byOpp, { '501': 3000 });
+    assert.deepEqual(parseWeights(weightsBook('Вес, т', 1.5)).byOpp, { '501': 3000 });
+    const guessed = parseWeights(weightsBook('Вес', 1.5));
+    assert.equal(guessed.unit, 'т');
+    assert.equal(guessed.unitFromHeader, false);
+  });
+  it('price per tonne uses the weights file first and the ТКП plan weight otherwise', () => {
+    const ref = parseReference(reference);
+    const t = parseTkp(tkpBook);
+    const withFile = revenuePrices([t], ref, parseWeights(weightsBook('Вес, кг', 1250)));
+    const r501 = withFile.find(r => r.opp === 501)!;
+    assert.equal(r501.weightSource, 'weights');
+    assert.equal(r501.weightKg, 2500);
+    assert.equal(r501.pricePerT, 600000 / 2.5);
+    assert.deepEqual(r501.tanks, ['РВС-1000/1-Альфа №01/26', 'РВС-1000/2-Альфа №02/26']);
+    assert.equal(r501.customer, 'ООО Альфа');
+    const r502 = withFile.find(r => r.opp === 502)!;
+    assert.equal(r502.weightSource, 'tkp');
+    assert.equal(r502.pricePerT, 200000 / 4);
+    const noFile = revenuePrices([t], ref, null);
+    assert.equal(noFile.find(r => r.opp === 501)!.pricePerT, 600000 / 3);
   });
 });

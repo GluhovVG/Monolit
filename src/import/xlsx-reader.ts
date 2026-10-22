@@ -23,10 +23,15 @@ function cellValue(value: ExcelValue): Cell {
 export async function readWorkbook(file: File): Promise<Workbook> {
   if (!/\.xls[xm]$/i.test(file.name)) throw new Error('Поддерживаются файлы .xlsx и .xlsm. Сохраните файл в формате Excel 2007+.');
   if (file.size > 25 * 1024 * 1024) throw new Error('Файл больше 25 МБ.');
+  return readWorkbookBuffer(await file.arrayBuffer(), file.name);
+}
+
+/** Reads workbook bytes (an uploaded file or a Google Sheets export). */
+export async function readWorkbookBuffer(buffer: ArrayBuffer, fileName: string): Promise<Workbook> {
   const mod = await import('exceljs');
   const ExcelJS = (mod as unknown as { default?: typeof mod }).default ?? mod;
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
+  await workbook.xlsx.load(buffer);
   const sheets = workbook.worksheets.map(ws => {
     const rows: Cell[][] = [];
     ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
@@ -41,5 +46,5 @@ export async function readWorkbook(file: File): Promise<Workbook> {
     });
     return { name: ws.name, rows: Array.from(rows, r => r ?? []) };
   });
-  return { fileName: file.name, sheets };
+  return { fileName, sheets };
 }

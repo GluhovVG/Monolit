@@ -17,7 +17,9 @@ export function isReferenceWorkbook(book: Workbook): boolean {
 
 function headerRowIndex(sheet: Sheet): number {
   for (let i = 0; i < Math.min(6, sheet.rows.length); i += 1) {
-    if (findColumn(sheet.rows[i], h => h.includes('шифр для бухгалтерии')) >= 0) return i;
+    // Both the accounting code and the tank code («ШИФР Тип - Объем / номер - Заказчик») — a weights table has only the first.
+    if (findColumn(sheet.rows[i], h => h.includes('шифр для бухгалтерии')) >= 0
+      && findColumn(sheet.rows[i], h => h.startsWith('шифр') && !h.includes('бухгалтерии')) >= 0) return i;
   }
   return -1;
 }

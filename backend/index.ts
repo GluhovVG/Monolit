@@ -3,6 +3,7 @@ import { requireAccessList, loadAllowedEmails } from './access';
 import { SOURCE_ROWS } from './source-2025';
 import { saveUpload, listUploads, deleteUpload, listAliases, saveAliases, deleteAlias } from './uploads';
 import { mapColumns, matchNames, reviewDeals, chat } from './ai-tools';
+import { fetchGoogleSheet, listSources, saveSource } from './google-sheets';
 
 const protectedRoute = [requireAuth(), withScopes('email'), requireAccessList()];
 
@@ -38,6 +39,9 @@ export const handler = router({
   'GET /api/uploads': [...protectedRoute, listUploads],
   'POST /api/uploads': [...protectedRoute, saveUpload],
   'DELETE /api/uploads/:id': [...protectedRoute, deleteUpload],
+  'GET /api/sources': [...protectedRoute, listSources],
+  'POST /api/sources': [...protectedRoute, saveSource],
+  'POST /api/gsheet': [...protectedRoute, fetchGoogleSheet],
   'GET /api/aliases': [...protectedRoute, listAliases],
   'POST /api/aliases': [...protectedRoute, saveAliases],
   'DELETE /api/aliases/:id': [...protectedRoute, deleteAlias],

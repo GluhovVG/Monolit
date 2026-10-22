@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '@appdeploy/client';
-import { AlertTriangle, BrainCircuit, CheckCircle2, ChevronDown, ChevronRight, Download, Info, Send, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, BrainCircuit, CheckCircle2, ChevronDown, ChevronRight, Download, Info, Link2, RefreshCw, Send, Trash2, Upload, X } from 'lucide-react';
 import {
   BLOCKS, consolidate, dealNameKey, ratio, registerTotals,
   type Consolidation, type DealIssue, type OppMk, type OppRow, type ProductionOpp, type WorkspaceData,
 } from '../domain/consolidate';
 import type { MkLine } from '../domain/mk-production';
+import { revenuePrices, type PriceRow } from '../domain/revenue-prices';
 import {
   blockTotals, departmentFromFileName, detectDepartmentMapping, extractDepartmentDeals, sanitizeMapping, sheetPreview,
   type AiMappingProposal, type DepartmentDeal, type DepartmentMapping,
@@ -16,10 +17,11 @@ import { parseRates } from '../import/rates';
 import { parseReference } from '../import/reference';
 import { normalizeName, type Workbook } from '../import/sheet';
 import { parseTkp, type TkpFile } from '../import/tkp';
-import { readWorkbook } from '../import/xlsx-reader';
-import { buildAiContext, loadWorkspace, packProduction, packReference, type Alias, type UploadMeta } from './workspace';
+import { parseWeights, type WeightsFile } from '../import/weights';
+import { readWorkbook, readWorkbookBuffer } from '../import/xlsx-reader';
+import { buildAiContext, loadWorkspace, packProduction, packReference, type Alias, type SheetSource, type UploadMeta } from './workspace';
 
-export type OperationsPage = 'uploads' | 'register' | 'production' | 'assistant';
+export type OperationsPage = 'uploads' | 'register' | 'prices' | 'production' | 'assistant';
 
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 const money = (n: number | null | undefined) => (n === null || n === undefined ? '—' : rub.format(n));
@@ -38,7 +40,7 @@ const neg = (n: number | null) => (n !== null && n < 0 ? 'negative' : undefined)
 
 /** Upload-based financial workspace: files, register by ОПП, MK production, AI. */
 export function Operations({ page }: { page: OperationsPage }) {
-  const [state, setState] = useState<{ data: WorkspaceData; uploads: UploadMeta[]; aliases: Alias[] } | null>(null);
+  const [state, setState] = useState<{ data: WorkspaceData; uploads: UploadMeta[]; aliases: Alias[]; weights: WeightsFile | null; sources: SheetSource[] } | null>(null);
   const [loadError, setLoadError] = useState('');
   const reload = async () => {
     try {
@@ -56,7 +58,8 @@ export function Operations({ page }: { page: OperationsPage }) {
       <button className="btn-primary" onClick={() => void reload()}>Повторить</button></div>;
   }
   if (!state || !consolidation) return <p role="status">Загружаем данные…</p>;
-  if (page === 'uploads') return <UploadsPage uploads={state.uploads} aliases={state.aliases} onChanged={reload} />;
+  if (page === 'uploads') return <UploadsPage uploads={state.uploads} aliases={state.aliases} sources={state.sources} onChanged={reload} />;
+  if (page === 'prices') return <PricesPage data={state.data} weights={state.weights} />;
   if (page === 'register') return <RegisterPage c={consolidation} data={state.data} onChanged={reload} />;
   if (page === 'production') return <ProductionPage c={consolidation} data={state.data} onChanged={reload} />;
   return <AssistantPage c={consolidation} />;
@@ -120,6 +123,13 @@ function prepare(book: Workbook, kind: FileKind, base: Pending): Pending {
       summary: `${report.rows.length} строк выпуска, ${tonnes(t)}, период ${report.periodFrom} – ${report.periodTo}`,
       issues: report.rows.some(r => r.opp === null) ? ['Есть строки без шифра — они не попадут в сделки.'] : [] };
   }
+  if (kind === 'weights') {
+    const w = parseWeights(book);
+    const n = Object.keys(w.byOpp).length;
+    return { ...base, status: n ? 'ready' : 'error', payload: w, rowCount: n,
+      summary: `Веса по ${n} шифрам ОПП (единица: ${w.unit}${w.unitFromHeader ? '' : ', определена по величине чисел — проверьте'})`,
+      error: n ? undefined : 'Не найдено строк с шифром ОПП и весом.' };
+  }
   if (kind === 'tkp') {
     const tkp = parseTkp(book);
     return applyTkp({ ...base, tkp, department: tkp.b24 !== null ? String(tkp.b24) : '' });
@@ -175,7 +185,7 @@ async function aiMap(p: Pending): Promise<Pending> {
   }
 }
 
-function UploadsPage({ uploads, aliases, onChanged }: { uploads: UploadMeta[]; aliases: Alias[]; onChanged: () => Promise<void> }) {
+function UploadsPage({ uploads, aliases, sources, onChanged }: { uploads: UploadMeta[]; aliases: Alias[]; sources: SheetSource[]; onChanged: () => Promise<void> }) {
   const [pending, setPending] = useState<Pending[]>([]);
   const [drag, setDrag] = useState(false);
   const update = (id: string, patch: Partial<Pending> | ((p: Pending) => Pending)) =>
@@ -238,7 +248,7 @@ function UploadsPage({ uploads, aliases, onChanged }: { uploads: UploadMeta[]; a
     await onChanged();
   };
   const ready = pending.filter(p => p.status === 'ready').length;
-  const uploadLabel = (u: UploadMeta) => (u.kind === 'department' ? `${u.department}, ${monthLabel(u.period)}` : u.kind === 'tkp' ? `сделка ${u.department}` : '—');
+  const uploadLabel = (u: UploadMeta) => (u.kind === 'department' ? `${u.department}, ${monthLabel(u.period)}` : u.kind === 'tkp' ? `сделка ${u.department}` : u.kind === 'weights' && u.department ? 'Google Таблица' : '—');
 
   return (
     <>
@@ -255,6 +265,8 @@ function UploadsPage({ uploads, aliases, onChanged }: { uploads: UploadMeta[]; a
         <small>Закрытые сделки по подразделениям · Расчёт ТКП · Номера заказов · Расценки · Выпуск СЗ · Выпуск сторонних цехов</small>
         <input type="file" accept=".xlsx,.xlsm" multiple hidden onChange={e => { if (e.target.files) void addFiles(e.target.files); e.target.value = ''; }} />
       </label>
+
+      <GoogleSheetsPanel sources={sources} onChanged={onChanged} />
 
       {pending.length > 0 && (
         <section className="panel">
@@ -441,7 +453,7 @@ function MkLines({ lines }: { lines: MkLine[] }) {
         <tr key={k}>
           <td>{l.source === 'own' ? 'Завод (СЗ)' : 'Сторонний'}</td><td>{l.source === 'own' ? monthLabel(l.month) : l.workshop}</td><td><small>{l.order}</small></td>
           <td>{tonnes(l.outputT)}</td><td>{money(l.metalRub)}</td>
-          <td>{l.rate === null ? <span className="login-error">нет</span> : num1(l.rate)}</td>
+          <td>{l.rate === null ? (l.source === 'own' ? <span className="login-error">нет</span> : '—') : num1(l.rate)}</td>
           <td>{money(l.workRub)}</td><td>{money(l.totalRub)}{l.note && <small>{l.note}</small>}</td>
         </tr>
       ))}</tbody>
@@ -676,8 +688,13 @@ function ProductionPage({ c, data, onChanged }: { c: Consolidation; data: Worksp
           {c.unfinishedOpps.length > 0 && <p><Info size={14} /> Незавершённое производство — шифры из отчётов о выпуске, которых ещё нет в «Номерах заказов» (в сделки не входят): {c.unfinishedOpps.join(', ')}.</p>}
         </section>
       )}
-      <MatchReview kind="contractor" title="Подрядчики без расценки" items={c.missingContractors} candidates={rateLabels} onSaved={onChanged}
-        toAlias={(item, candidate) => ({ from: normalizeName(item), to: normalizeName(candidate) })} />
+      {c.missingContractors.length > 0 && (
+        <details className="panel">
+          <summary>Сопоставить названия цехов с «Расценками» (если подрядчик записан по-разному)</summary>
+          <MatchReview kind="contractor" title="Цеха без точного совпадения с «Расценками»" items={c.missingContractors} candidates={rateLabels} onSaved={onChanged}
+            toAlias={(item, candidate) => ({ from: normalizeName(item), to: normalizeName(candidate) })} />
+        </details>
+      )}
       <div className="filters">
         <div className="search-box"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск: ОПП, Б24, заказчик, бак" aria-label="Поиск" /></div>
         <select value={scope} onChange={e => setScope(e.target.value as 'finished' | 'all')} aria-label="Какие шифры показать">
@@ -798,6 +815,124 @@ function AssistantPage({ c }: { c: Consolidation }) {
         </div>
         <small>ИИ видит только сводку реестра из загруженных файлов.</small>
       </section>
+    </>
+  );
+}
+
+/* ───────────────────────── Google Sheets sources ───────────────────────── */
+
+const SHEET_KINDS: Array<{ kind: SheetSource['kind']; label: string }> = [
+  { kind: 'reference', label: 'Номера заказов' },
+  { kind: 'weights', label: 'Веса по шифрам ОПП' },
+];
+
+const base64ToBuffer = (b64: string): ArrayBuffer => {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+};
+
+/** Reads «Номера заказов» / веса straight from a Google Sheet link and saves them like an uploaded file. */
+function GoogleSheetsPanel({ sources, onChanged }: { sources: SheetSource[]; onChanged: () => Promise<void> }) {
+  const [urls, setUrls] = useState<Record<string, string>>(() => Object.fromEntries(sources.map(s => [s.kind, s.url])));
+  const [status, setStatus] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const load = async (kind: SheetSource['kind']) => {
+    const url = (urls[kind] ?? '').trim();
+    if (!url) return;
+    setBusy(kind);
+    setStatus(s => ({ ...s, [kind]: 'Скачиваем таблицу…' }));
+    try {
+      await api.post('/api/sources', { kind, url });
+      const res = await api.post('/api/gsheet', { url });
+      const { fileName, base64 } = res.data as { fileName: string; base64: string };
+      const book = await readWorkbookBuffer(base64ToBuffer(base64), fileName);
+      const p = prepare(book, kind, { id: kind, fileName, status: 'reading', kind, summary: '', issues: [], department: '', period: '' });
+      if (p.status !== 'ready' || !p.payload) throw new Error(p.error ?? 'Таблица не распознана как «' + SHEET_KINDS.find(k => k.kind === kind)!.label + '».');
+      await api.post('/api/uploads', { kind, fileName: 'Google: ' + fileName, department: kind === 'weights' ? 'google' : '', period: '', payload: p.payload, rowCount: p.rowCount });
+      setStatus(s => ({ ...s, [kind]: 'Загружено: ' + p.summary }));
+      await onChanged();
+    } catch (cause) {
+      setStatus(s => ({ ...s, [kind]: 'Ошибка: ' + errorText(cause, 'не удалось загрузить таблицу.') }));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <section className="panel">
+      <div className="panel-heading"><div><h2><Link2 size={16} /> Google Таблицы</h2>
+        <p>Ссылка сохраняется; кнопка «Обновить» заново читает таблицу. Нужен доступ «Все, у кого есть ссылка» (просмотр).</p></div></div>
+      {SHEET_KINDS.map(({ kind, label }) => {
+        const saved = sources.find(s => s.kind === kind);
+        return (
+          <div className="filters" key={kind}>
+            <label style={{ flex: 1 }}>{label}
+              <input value={urls[kind] ?? ''} placeholder="https://docs.google.com/spreadsheets/d/…" onChange={e => setUrls(u => ({ ...u, [kind]: e.target.value }))} />
+            </label>
+            <button className="btn-secondary" disabled={busy !== null || !(urls[kind] ?? '').trim()} onClick={() => void load(kind)}>
+              <RefreshCw size={15} /> {busy === kind ? 'Загружаем…' : saved?.url ? 'Обновить' : 'Загрузить'}
+            </button>
+            {status[kind] && <small>{status[kind]}</small>}
+            {!status[kind] && saved?.updatedAt ? <small>ссылка сохранена {new Date(saved.updatedAt).toLocaleString('ru-RU')}</small> : null}
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+/* ───────────────────────── Prices for revenue ───────────────────────── */
+
+function exportPrices(rows: PriceRow[]) {
+  const head = ['Шифр ОПП', 'Заказчик', 'РВС', 'Б24', 'Стоимость МК, ₽', 'Вес, т', 'Источник веса', 'Цена, ₽/т', 'Замечание'];
+  const lines = rows.map(r => [r.opp, r.customer, r.tanks.join('; '), r.b24, r.mkValue, r.weightKg === null ? null : r.weightKg / 1000,
+    r.weightSource === 'weights' ? 'файл весов' : r.weightSource === 'tkp' ? 'ТКП' : '', r.pricePerT, r.issue].map(csvCell).join(';'));
+  const csv = '﻿' + [head.map(csvCell).join(';'), ...lines].join('\r\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'MONOLITH-Ceny-dlya-vyruchki.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function PricesPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
+  const [search, setSearch] = useState('');
+  const all = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights), [data, weights]);
+  const rows = all.filter(r => `${r.opp ?? ''} ${r.b24 ?? ''} ${r.customer} ${r.tanks.join(' ')}`.toLowerCase().includes(search.toLowerCase()));
+  const value = rows.reduce((s, r) => s + (r.mkValue ?? 0), 0);
+  const weightKg = rows.reduce((s, r) => s + (r.weightKg ?? 0), 0);
+  const tonne = (kgValue: number | null) => (kgValue === null ? '—' : new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 3 }).format(kgValue / 1000));
+  return (
+    <>
+      <Heading eyebrow="ВЫРУЧКА МК" title="Расчёт цен для выручки"
+        text="Цена за тонну = стоимость МК из «Расчёта ТКП» / вес. Вес берётся из файла весов по шифру ОПП, а если шифра там нет — плановый вес из ТКП. Позиции ТКП сопоставляются с шифрами через «Номера заказов»."
+        actions={<button className="btn-secondary" disabled={!rows.length} onClick={() => exportPrices(rows)}><Download size={16} /> CSV</button>} />
+      {!data.tkp.length && <div className="bottom-note">Загрузите файлы «Расчёт ТКП» — откройте «Загрузка файлов».</div>}
+      {!data.reference && <div className="bottom-note">Не загружены «Номера заказов»: позиции ТКП нельзя сопоставить с шифрами ОПП.</div>}
+      {!weights && data.tkp.length > 0 && <div className="bottom-note">Файл весов не загружен — для всех шифров используется плановый вес из ТКП.</div>}
+      <div className="filters">
+        <div className="search-box"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск: ОПП, Б24, заказчик, РВС" aria-label="Поиск" /></div>
+        <span className="result-count">{rows.length} шифров</span>
+      </div>
+      <div className="table-wrap"><table className="register-table">
+        <thead><tr><th>Шифр ОПП</th><th>Заказчик</th><th>РВС</th><th>Б24</th><th>Стоимость МК, ₽</th><th>Вес, т</th><th>Цена, ₽/т</th></tr></thead>
+        <tbody>
+          <tr className="total-row"><td colSpan={4}>Итого</td><td>{money(value)}</td><td>{tonne(weightKg)}</td><td>{money(weightKg ? value / (weightKg / 1000) : null)}</td></tr>
+          {rows.map(r => (
+            <tr key={r.key}>
+              <td><strong>{r.opp ?? '—'}</strong></td><td>{r.customer || '—'}</td>
+              <td className="tanks-cell"><small>{r.tanks.join('; ')}</small>{r.issue && <small className="login-error">{r.issue}</small>}</td>
+              <td>{r.b24 ?? '—'}</td><td>{money(r.mkValue)}</td>
+              <td>{tonne(r.weightKg)}<small>{r.weightSource === 'weights' ? 'файл весов' : r.weightSource === 'tkp' ? 'из ТКП' : ''}</small></td>
+              <td><strong>{money(r.pricePerT)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
     </>
   );
 }

@@ -3,9 +3,10 @@ import { productionKind } from './production';
 import { isRatesWorkbook } from './rates';
 import { isReferenceWorkbook } from './reference';
 import { isTkpWorkbook } from './tkp';
+import { isWeightsWorkbook } from './weights';
 import type { Workbook } from './sheet';
 
-export type FileKind = 'reference' | 'rates' | 'prod_own' | 'prod_ext' | 'department' | 'tkp' | 'unknown';
+export type FileKind = 'reference' | 'rates' | 'prod_own' | 'prod_ext' | 'department' | 'tkp' | 'weights' | 'unknown';
 
 export const FILE_KIND_LABELS: Record<FileKind, string> = {
   reference: 'Справочник «Номера заказов»',
@@ -14,6 +15,7 @@ export const FILE_KIND_LABELS: Record<FileKind, string> = {
   prod_ext: 'Выпуск сторонних цехов',
   department: 'Закрытые сделки подразделения',
   tkp: 'Расчёт ТКП (план МК)',
+  weights: 'Веса по шифрам ОПП',
   unknown: 'Не распознан',
 };
 
@@ -26,5 +28,6 @@ export function detectFileKind(book: Workbook): FileKind {
   if (isRatesWorkbook(book)) return 'rates';
   if (isTkpWorkbook(book)) return 'tkp';
   if (isDepartmentFileName(book.fileName)) return 'department';
+  if (isWeightsWorkbook(book)) return 'weights';
   return 'unknown';
 }

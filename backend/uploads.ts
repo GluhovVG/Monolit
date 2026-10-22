@@ -6,7 +6,7 @@ const UPLOAD_LOG = 'upload_log';
 const ALIASES = 'aliases';
 /** Leaves headroom under the 256 KiB per-item database limit. */
 const MAX_PAYLOAD_CHARS = 230_000;
-const KINDS = ['reference', 'rates', 'prod_own', 'prod_ext', 'department', 'tkp'] as const;
+const KINDS = ['reference', 'rates', 'prod_own', 'prod_ext', 'department', 'tkp', 'weights'] as const;
 type Kind = typeof KINDS[number];
 
 type UploadBody = {
@@ -78,7 +78,7 @@ export async function listUploads() {
 
 export async function deleteUpload(ctx: RouterContext) {
   const id = str(ctx.params.id, 40);
-  if (!/^(reference|rates|prod_own|prod_ext|dept_[0-9a-f]{8}|tkp_\d{3,7})$/.test(id)) return error('Неверный идентификатор.', 400);
+  if (!/^(reference|rates|prod_own|prod_ext|weights|dept_[0-9a-f]{8}|tkp_\d{3,7})$/.test(id)) return error('Неверный идентификатор.', 400);
   const [ok] = await db.delete(UPLOADS, [id]);
   return json({ deleted: Boolean(ok) });
 }
