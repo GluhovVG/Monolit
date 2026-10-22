@@ -24,3 +24,5 @@ jobs:
         run: npm test
       - name: Build frontend
         run: npm run build
+        env:
+          MONOLITH_LOCAL_CLIENT: '1'

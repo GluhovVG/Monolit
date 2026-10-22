@@ -1,26 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
+import { api, auth } from '@appdeploy/client';
 import { DEFAULT_GENERAL_PARAMETERS, checkFinancialRegister, financialTotals, type GeneralParameters } from './domain/financial-controls';
 import { buildAccountingCsv } from './domain/finance-export';
 import {
-  accountingDeals, dealsForPeriod, periods, sumKnown, SOURCE_NAME, SOURCE_SHEET,
+  dealsForPeriod, mapSourceRows, parseSourceRows, periods, sumKnown, SOURCE_NAME, SOURCE_SHEET,
   type AccountingDeal, type BlockName,
 } from './data/management-2025';
-const api = {
-  post: async (path: string, body: unknown) => {
-    const response = await fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(
-        typeof data?.message === 'string' ? data.message : 'API request failed'
-      );
-    }
-    return { data };
-  },
-};
 import {
   LayoutDashboard,
   FileText,
@@ -39,6 +24,9 @@ import {
   BrainCircuit,
   FileSpreadsheet,
   SlidersHorizontal,
+  LogIn,
+  LogOut,
+  Lock,
 } from 'lucide-react';
 
 type Deal = AccountingDeal;
@@ -47,6 +35,22 @@ const money = (n: number) =>
 const pct = (n: number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(n) + '%';
 const periodOptions = periods;
+/** Russian plural: plural(5, ['сделка', 'сделки', 'сделок']) → 'сделок'. */
+const plural = (n: number, forms: [string, string, string]) => {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return forms[0];
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return forms[1];
+  return forms[2];
+};
+const BLOCK_FIELD_LABELS = {
+  active: 'активен',
+  includeInTotals: 'показывать в детализации',
+  requireConfirmation: 'требовать подтверждение',
+} as const;
+const DEAL_FORMS: [string, string, string] = ['сделка', 'сделки', 'сделок'];
+const errorText = (cause: unknown, fallback: string) =>
+  cause instanceof Error && cause.message ? cause.message : fallback;
 
 const regulationSections = [
   {
@@ -99,11 +103,120 @@ const regulationSections = [
   },
 ];
 
+type GateState =
+  | { kind: 'checking' }
+  | { kind: 'signedOut'; message?: string }
+  | { kind: 'loading'; email: string | null }
+  | { kind: 'denied'; email: string | null; configured: boolean }
+  | { kind: 'error'; email: string | null; message: string }
+  | { kind: 'ready'; email: string | null; deals: AccountingDeal[] };
+
 function App() {
+  const [gate, setGate] = useState<GateState>({ kind: 'checking' });
+  const [busy, setBusy] = useState(false);
+
+  const loadData = async () => {
+    let email: string | null = null;
+    try {
+      const access = (await api.get('/api/access')).data as { email: string | null; configured: boolean; allowed: boolean };
+      email = access.email;
+      if (!access.allowed) {
+        setGate({ kind: 'denied', email, configured: access.configured });
+        return;
+      }
+      setGate({ kind: 'loading', email });
+      const response = await api.get('/api/deals');
+      setGate({ kind: 'ready', email, deals: mapSourceRows(parseSourceRows(response.data)) });
+    } catch (cause) {
+      if (!auth.isSignedIn()) {
+        setGate({ kind: 'signedOut', message: 'Сеанс истёк. Войдите снова.' });
+        return;
+      }
+      setGate({ kind: 'error', email, message: errorText(cause, 'Не удалось загрузить данные.') });
+    }
+  };
+
+  useEffect(() => {
+    if (auth.isSignedIn()) void loadData();
+    else setGate({ kind: 'signedOut' });
+  }, []);
+
+  const signIn = async () => {
+    setBusy(true);
+    try {
+      await auth.signIn();
+      await loadData();
+    } catch (cause) {
+      const code = (cause as { code?: string })?.code;
+      setGate({
+        kind: 'signedOut',
+        message: code === 'popup_blocked'
+          ? 'Браузер заблокировал окно входа. Разрешите всплывающие окна для этого сайта и повторите.'
+          : code === 'popup_closed' ? 'Вход отменён.' : 'Не удалось войти. Повторите попытку.',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    await auth.signOut();
+    setGate({ kind: 'signedOut' });
+  };
+
+  if (gate.kind === 'ready') {
+    return <Workspace accountingDeals={gate.deals} userEmail={gate.email} onSignOut={signOut} />;
+  }
+  return (
+    <div className="login-screen">
+      <div className="login-card">
+        <div className="brand-mark">M</div>
+        <h1>MONOLITH</h1>
+        <p className="login-sub">Финансовый контроль · управленческий учёт</p>
+        {gate.kind === 'checking' || gate.kind === 'loading' ? (
+          <p role="status">{gate.kind === 'loading' ? 'Загружаем данные…' : 'Проверяем вход…'}</p>
+        ) : gate.kind === 'signedOut' ? (
+          <>
+            <p><Lock size={15} /> Данные доступны только сотрудникам из списка доступа.</p>
+            {gate.message && <p role="alert" className="login-error">{gate.message}</p>}
+            <button className="btn-primary full-btn" onClick={signIn} disabled={busy}>
+              <LogIn size={16} /> {busy ? 'Входим…' : 'Войти'}
+            </button>
+          </>
+        ) : gate.kind === 'denied' ? (
+          <>
+            <p role="alert" className="login-error">
+              {gate.configured
+                ? 'У учётной записи ' + (gate.email || 'без адреса почты') + ' нет доступа к финансовым данным. Обратитесь к администратору.'
+                : 'Список доступа ещё не настроен. Владелец приложения должен задать секрет ALLOWED_EMAILS в AppDeploy.'}
+            </p>
+            <button className="btn-secondary full-btn" onClick={signOut}><LogOut size={16} /> Выйти</button>
+          </>
+        ) : (
+          <>
+            <p role="alert" className="login-error">{gate.message}</p>
+            <button className="btn-primary full-btn" onClick={() => void loadData()}>Повторить</button>
+            <button className="btn-secondary full-btn" onClick={signOut}><LogOut size={16} /> Выйти</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Workspace({
+  accountingDeals,
+  userEmail,
+  onSignOut,
+}: {
+  accountingDeals: AccountingDeal[];
+  userEmail: string | null;
+  onSignOut: () => void;
+}) {
   const [page, setPage] = useState('dashboard');
   const [period, setPeriod] = useState('2025');
   const [generalParameters, setGeneralParameters] = useState<GeneralParameters>(DEFAULT_GENERAL_PARAMETERS);
-  const periodDeals = useMemo(() => dealsForPeriod(accountingDeals, period), [period]);
+  const periodDeals = useMemo(() => dealsForPeriod(accountingDeals, period), [accountingDeals, period]);
   const [filter, setFilter] = useState('Все блоки');
   useEffect(() => {
     if (filter !== 'Все блоки' && !generalParameters.blocks.some(b => b.name === filter && b.active && b.includeInTotals)) {
@@ -120,10 +233,9 @@ function App() {
     if (page !== 'checks') return;
     let active = true;
     setAiAvailability('checking');
-    fetch('/api/health', { cache: 'no-store' })
-      .then(async response => {
-        if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('API not reachable');
-        const body = await response.json();
+    api.get('/api/health')
+      .then(response => {
+        const body = response.data;
         if (body?.status !== 'ok') throw new Error('API not ready');
         if (active) setAiAvailability('available');
       })
@@ -132,6 +244,12 @@ function App() {
   }, [page]);
   const [notice, setNotice] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setSelected(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected]);
   const deals = useMemo(
     () =>
       periodDeals.filter(
@@ -194,12 +312,15 @@ function App() {
       const response = await api.post('/api/review-change', {
         description: aiText,
       });
+      const data = response.data as { summary?: string; label?: string; action?: string; rationale?: string; disclaimer?: string };
       setAiResult(
-        response.data.summary +
-          ' Категория: ' +
-          response.data.label +
-          '. ' +
-          response.data.action
+        [
+          data.summary,
+          data.label ? 'Категория: ' + data.label + '.' : '',
+          data.action,
+          data.rationale ? 'Обоснование ИИ: ' + data.rationale : '',
+          data.disclaimer,
+        ].filter(Boolean).join(' ')
       );
     } catch (cause) {
       setAiResult(cause instanceof Error
@@ -225,7 +346,7 @@ function App() {
             <strong>MONOLITH</strong>
             <span>ФИНАНСОВЫЙ КОНТРОЛЬ</span>
           </div>
-          <button className="mobile-close" onClick={() => setMobileNav(false)}>
+          <button className="mobile-close" aria-label="Закрыть меню" onClick={() => setMobileNav(false)}>
             <X size={18} />
           </button>
         </div>
@@ -258,21 +379,24 @@ function App() {
             <ShieldCheck size={18} />
           </div>
           <div>
-            <strong>Авторизация отсутствует</strong>
-            <small>Разграничение прав не настроено</small>
+            <strong>Вход по списку доступа</strong>
+            <small>Роли пока не разделены</small>
           </div>
         </div>
         <div className="profile">
-          <div className="avatar">?</div>
+          <div className="avatar">{(userEmail || '?').slice(0, 1).toUpperCase()}</div>
           <div>
-            <strong>Без входа в систему</strong>
+            <strong>{userEmail || 'Пользователь'}</strong>
             <small>Все данные предварительные</small>
           </div>
+          <button className="icon-btn" aria-label="Выйти" title="Выйти" onClick={onSignOut}>
+            <LogOut size={16} />
+          </button>
         </div>
       </aside>
       <main className="main">
         <header className="topbar">
-          <button className="mobile-menu" onClick={() => setMobileNav(true)}>
+          <button className="mobile-menu" aria-label="Открыть меню" onClick={() => setMobileNav(true)}>
             <Menu size={20} />
           </button>
           <div className="breadcrumbs">
@@ -294,14 +418,14 @@ function App() {
               <Bell size={18} />
               <i></i>
             </button>
-            <div className="top-avatar">?</div>
+            <div className="top-avatar">{(userEmail || '?').slice(0, 1).toUpperCase()}</div>
           </div>
         </header>
         <div className="content">
           {notice && (
             <div className="toast">
               <span>{notice}</span>
-              <button onClick={() => setNotice('')}>
+              <button aria-label="Закрыть уведомление" onClick={() => setNotice('')}>
                 <X size={16} />
               </button>
             </div>
@@ -420,7 +544,7 @@ function App() {
                     </div>
                     <h3>{b.name}</h3>
                     <strong>{b.amount !== null ? money(b.amount) : '—'}</strong>
-                    <small>{b.count} сделок с указанными затратами</small>
+                    <small>{b.count} {plural(b.count, DEAL_FORMS)} с указанными затратами</small>
                     <div className="mini-bar"><span style={{ width: b.amount !== null && totals.cost > 0
                       ? Math.min(100, Math.max(0, (b.amount / totals.cost) * 100)) + '%' : '0%' }}></span></div>
                     <div className="block-meta">
@@ -571,7 +695,7 @@ function App() {
                     <option key={b.name}>{b.name}</option>
                   ))}
                 </select>
-                <span className="result-count">{deals.length} сделок</span>
+                <span className="result-count">{deals.length} {plural(deals.length, DEAL_FORMS)}</span>
               </div>
               <div className="table-wrap">
                 <table>
@@ -697,7 +821,7 @@ function App() {
                 />
                 <div className="ai-form-footer">
                   <small>
-                    При отправке текст передаётся через /api/review-change серверному ИИ. Не добавляйте конфиденциальные сведения без разрешения.
+                    Текст передаётся серверному ИИ. Не добавляйте пароли и персональные данные.
                   </small>
                   <button
                     className="btn-primary"
@@ -873,7 +997,7 @@ function App() {
                   <div className="eyebrow">КОНФИГУРАЦИЯ</div>
                   <h1>Настройки</h1>
                   <p>
-                    Общие параметры демо-сеанса. Постоянное серверное хранение пока не подключено.
+                    Общие параметры текущего сеанса. Постоянное серверное хранение пока не подключено.
                   </p>
                 </div>
               </div>
@@ -894,7 +1018,7 @@ function App() {
                   <tbody>{generalParameters.blocks.map(block => (
                     <tr key={block.name}><td>{block.name}</td>
                       {(['active', 'includeInTotals', 'requireConfirmation'] as const).map(field => (
-                        <td key={field}><input type="checkbox" checked={block[field]} aria-label={block.name + ' ' + field}
+                        <td key={field}><input type="checkbox" checked={block[field]} aria-label={block.name + ': ' + BLOCK_FIELD_LABELS[field]}
                           onChange={e => setGeneralParameters(prev => ({ ...prev,
                             blocks: prev.blocks.map(item => item.name === block.name ? { ...item, [field]: e.target.checked } : item),
                           }))}/></td>
@@ -944,7 +1068,7 @@ function App() {
                   />
                   <Setting
                     label="Порог существенности"
-                    desc={generalParameters.materialityRub.toLocaleString("ru-RU") + " ₽ или " + generalParameters.materialityPercent + "% (демо)"}
+                    desc={generalParameters.materialityRub.toLocaleString('ru-RU') + ' ₽ или ' + generalParameters.materialityPercent + '% (до утверждения методики)'}
                   />
                   <Setting
                     label="Подтверждение результата"
@@ -969,7 +1093,7 @@ function App() {
                     </div>
                     <div>
                       <CheckCircle2 size={17} /> Подключён источник Excel к
-                      интерфейс
+                      интерфейсу
                     </div>
                     <div>
                       <AlertTriangle size={17} /> Требуется сверить первичные файлы и сопоставления
@@ -979,8 +1103,11 @@ function App() {
                       контрольных примерах
                     </div>
                     <div>
-                      <AlertTriangle size={17} /> Требуется настроить
-                      аутентификацию и постоянное хранилище
+                      <CheckCircle2 size={17} /> Вход и список доступа к данным
+                    </div>
+                    <div>
+                      <AlertTriangle size={17} /> Требуется разделить роли и
+                      подключить постоянное хранилище
                     </div>
                   </div>
                 </section>
@@ -997,13 +1124,14 @@ function App() {
       </main>
       {selected && (
         <div className="modal-backdrop" onClick={() => setSelected(null)}>
-          <div className="deal-modal" onClick={e => e.stopPropagation()}>
+          <div className="deal-modal" role="dialog" aria-modal="true" aria-labelledby="deal-modal-title"
+            onClick={e => e.stopPropagation()}>
             <div className="modal-head">
               <div>
                 <div className="eyebrow">{selected.id} · КАРТОЧКА СДЕЛКИ</div>
-                <h2>{selected.name}</h2>
+                <h2 id="deal-modal-title">{selected.name}</h2>
               </div>
-              <button className="icon-btn" onClick={() => setSelected(null)}>
+              <button className="icon-btn" aria-label="Закрыть карточку" autoFocus onClick={() => setSelected(null)}>
                 <X size={18} />
               </button>
             </div>

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { buildAccountingCsv } from '../src/domain/finance-export.ts';
-import { accountingDeals, dealsForPeriod } from '../src/data/management-2025.ts';
+import { dealsForPeriod, mapSourceRows } from '../src/data/management-2025.ts';
+import { SOURCE_ROWS } from '../backend/source-2025.ts';
+
+const accountingDeals = mapSourceRows(SOURCE_ROWS);
 
 describe('Accounting export contract', () => {
   it('exports the exact selected period with header and source row references', () => {

@@ -1,15 +1,40 @@
-import { ai, router, json, error } from '@appdeploy/sdk';
+import { ai, router, json, error, requireAuth, withScopes } from '@appdeploy/sdk';
+import { requireAccessList, loadAllowedEmails } from './access';
+import { SOURCE_ROWS } from './source-2025';
+
+const protectedRoute = [requireAuth(), withScopes('email'), requireAccessList()];
 
 export const handler = router({
   'GET /api/health': [
     async () =>
       json({
         status: 'ok',
-        mode: 'demo',
-        message: 'MONOLITH API доступен; финансовые источники не подключены.',
+        message: 'MONOLITH API доступен. Финансовые данные выдаются только после входа.',
       }),
   ],
+  'GET /api/access': [
+    requireAuth(),
+    async ctx => {
+      let configured = false;
+      let allowed = false;
+      try {
+        const emails = await loadAllowedEmails();
+        configured = emails.length > 0;
+        const email = ctx.user?.email?.toLowerCase();
+        allowed = Boolean(email && emails.includes(email));
+      } catch (cause) {
+        console.error('Access list could not be read', cause);
+        return error('Список доступа временно недоступен.', 503);
+      }
+      return json({ email: ctx.user?.email ?? null, configured, allowed });
+    },
+  ],
+  'GET /api/deals': [
+    ...protectedRoute,
+    async () => json({ rows: SOURCE_ROWS }),
+  ],
   'POST /api/review-change': [
+    ...protectedRoute,
     async ({ body }) => {
       const input = body as { description?: string };
       const description = String(input?.description || '').trim();

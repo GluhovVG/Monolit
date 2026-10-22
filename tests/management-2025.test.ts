@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  accountingDeals, dealsForPeriod, periods, sumKnown, SOURCE_SHA256,
+  dealsForPeriod, mapSourceRows, parseSourceRows, periods, sumKnown, SOURCE_SHA256,
 } from '../src/data/management-2025.ts';
+import { SOURCE_ROWS } from '../backend/source-2025.ts';
+
+const accountingDeals = mapSourceRows(SOURCE_ROWS);
 import { DEFAULT_GENERAL_PARAMETERS, checkFinancialRegister, financialTotals } from '../src/domain/financial-controls.ts';
 
 describe('Imported management workbook 2025', () => {
@@ -58,5 +61,11 @@ describe('Imported management workbook 2025', () => {
     const missing = checkFinancialRegister(dealsForPeriod(accountingDeals, 'undated'), DEFAULT_GENERAL_PARAMETERS);
     assert.equal(missing.issues.filter(issue => issue.code === 'SOURCE_PERIOD_MISSING').length, 1);
     assert.equal(year.okToPublish, false);
+  });
+  it('accepts only a well-formed server payload', () => {
+    assert.equal(parseSourceRows({ rows: SOURCE_ROWS }).length, 91);
+    assert.throws(() => parseSourceRows({}));
+    assert.throws(() => parseSourceRows({ rows: [[1, 2, 3]] }));
+    assert.throws(() => parseSourceRows(null));
   });
 });

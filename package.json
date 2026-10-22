@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "dev:local": "MONOLITH_LOCAL_CLIENT=1 vite"
   },
   "dependencies": {
     "lucide-react": "^0.469.0",

@@ -1,9 +1,6 @@
-import january from './management-2025-01.json';
-import febApril from './management-2025-02.json';
-import springSummer from './management-2025-03.json';
-import summer from './management-2025-04.json';
-import autumn from './management-2025-05.json';
-import winter from './management-2025-06.json';
+import type { SourceRow } from './source-row';
+
+export type { SourceRow };
 
 export const SOURCE_SHA256 = 'f31eab000f3132223754e5e34d7f0e8aab4e28af42c3b3de44fec01ddb0e86f7';
 export const SOURCE_NAME = 'Управленческий учет 2025 (2)(1).xlsx';
@@ -29,26 +26,13 @@ export type AccountingDeal = {
   issue: string;
 };
 
-// Row layout, mapped from cached XLSX values (never from Excel formula strings):
-// row, deal code, month (0 = period not supplied), customer, item,
-// plan revenue, fact revenue, plan cost, fact cost, actual weight (kg),
-// MK fact revenue, MK fact cost, documentation fact, supply fact,
-// delivery fact, construction fact, BG/fines fact.
-// null != 0. Source formulas are not independently recalculated.
-type SourceRow = [
-  number, string, number, string, string,
-  number, number, number, number,
-  number | null, number | null, number | null,
-  number | null, number | null, number | null,
-  number | null, number | null
-];
-
+// Row layout: see ./source-row.ts. The data itself lives only on the server.
 const SOURCE_ERROR_ROWS = new Set([50, 80, 90, 91, 96]);
 const SOURCE_REVENUE_CONFLICT_ROWS = new Set([34, 51, 52]);
-const files = [january, febApril, springSummer, summer, autumn, winter];
 
-export const accountingDeals: AccountingDeal[] = files.flatMap(file =>
-  (file as unknown as SourceRow[]).map(row => {
+/** Maps raw rows received from GET /api/deals into typed deals. */
+export function mapSourceRows(rows: readonly SourceRow[]): AccountingDeal[] {
+  return rows.map(row => {
     const [sourceRow, id, month, customer, name, plan, revenue, planCost, cost,
       weightKg, , mkCost, docs, supply, delivery, smr, fines] = row;
     const issue = [
@@ -67,8 +51,20 @@ export const accountingDeals: AccountingDeal[] = files.flatMap(file =>
       },
       fines, status: 'На проверке' as const, issue,
     };
-  })
-);
+  });
+}
+
+/** Rejects a malformed server payload instead of rendering partial numbers. */
+export function parseSourceRows(payload: unknown): SourceRow[] {
+  const rows = (payload as { rows?: unknown })?.rows;
+  if (!Array.isArray(rows)) throw new Error('Сервер вернул данные в неверном формате.');
+  for (const row of rows) {
+    if (!Array.isArray(row) || row.length !== 17 || typeof row[0] !== 'number' || typeof row[1] !== 'string') {
+      throw new Error('Сервер вернул строку источника в неверном формате.');
+    }
+  }
+  return rows as SourceRow[];
+}
 
 export const periods = [
   { value: '2025', label: 'Весь 2025 год' },

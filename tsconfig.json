@@ -19,7 +19,12 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "paths": {
+      "@appdeploy/client": [
+        "./src/platform/appdeploy-client-local.ts"
+      ]
+    }
   },
   "include": [
     "src"
