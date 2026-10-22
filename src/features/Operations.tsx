@@ -19,6 +19,8 @@ import { parseReference } from '../import/reference';
 import { normalizeName, type Workbook } from '../import/sheet';
 import { parseTkp, type TkpFile } from '../import/tkp';
 import { parseWeights, type WeightsFile } from '../import/weights';
+import { hasActsSheet, readActs, type ActsFile } from '../import/acts';
+import { outputByWorkshops, workshopTotals, WORKSHOP_GROUP_LABELS, type WorkshopGroup, type WorkshopRow } from '../domain/output-workshops';
 import { readWorkbook, readWorkbookBuffer } from '../import/xlsx-reader';
 import { downloadCsv, downloadXlsx, type Matrix } from './table-export';
 import { closeChecklist } from '../domain/close-checklist';
@@ -46,7 +48,7 @@ const neg = (n: number | null) => (n !== null && n < 0 ? 'negative' : undefined)
 
 /** Upload-based financial workspace: files, register by ОПП, MK production, AI. */
 export function Operations({ page }: { page: OperationsPage }) {
-  const [state, setState] = useState<{ data: WorkspaceData; uploads: UploadMeta[]; aliases: Alias[]; weights: WeightsFile | null; sources: SheetSource[] } | null>(null);
+  const [state, setState] = useState<{ data: WorkspaceData; uploads: UploadMeta[]; aliases: Alias[]; weights: WeightsFile | null; acts: ActsFile | null; sources: SheetSource[] } | null>(null);
   const [loadError, setLoadError] = useState('');
   const reload = async () => {
     try {
@@ -70,7 +72,7 @@ export function Operations({ page }: { page: OperationsPage }) {
   if (!state || !consolidation) return null;
   if (page === 'uploads') return <UploadsPage uploads={state.uploads} aliases={state.aliases} sources={state.sources} onChanged={reload} />;
   if (page === 'prices') return <PricesPage data={state.data} weights={state.weights} />;
-  if (page === 'output') return <OutputPage data={state.data} weights={state.weights} />;
+  if (page === 'output') return <OutputPage data={state.data} weights={state.weights} acts={state.acts} />;
   if (page === 'notkp') return <NoTkpPage data={state.data} c={consolidation} />;
   if (page === 'register') return <RegisterPage c={consolidation} data={state.data} onChanged={reload} />;
   if (page === 'production') return <ProductionPage c={consolidation} data={state.data} onChanged={reload} />;
@@ -120,6 +122,16 @@ async function fileToBase64(file: File): Promise<string> {
   let binary = '';
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(binary);
+}
+
+function prepareActs(acts: ActsFile, base: Pending): Pending {
+  const t = acts.rows.reduce((s, r) => s + r[4], 0) / 1000;
+  const p = acts.periods;
+  return {
+    ...base, kind: 'acts', status: acts.rows.length ? 'ready' : 'error', payload: acts, rowCount: acts.actRows, issues: acts.notes,
+    summary: `${acts.actRows} актов, ${p[0] ?? '—'} … ${p[p.length - 1] ?? '—'}, выпуск ${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(t)} т (брутто для выручки)`,
+    error: acts.rows.length ? undefined : 'На листе «Акты» нет выпуска.',
+  };
 }
 
 function prepare(book: Workbook, kind: FileKind, base: Pending): Pending {
@@ -222,6 +234,12 @@ function UploadsPage({ uploads, aliases, sources, onChanged }: { uploads: Upload
     setPending(list => [...items.map(x => x.base), ...list]);
     for (const { file, base } of items) {
       try {
+        // «Выпуск продукции» (~7 МБ, десятки листов): читается только лист «Акты», без разбора всей книги.
+        const bytes = /\.xlsx$/i.test(file.name) ? new Uint8Array(await file.arrayBuffer()) : null;
+        if (bytes && await hasActsSheet(bytes)) {
+          update(base.id, prepareActs(await readActs(bytes, file.name), { ...base, kind: 'acts', file }));
+          continue;
+        }
         const book = await readWorkbook(file);
         const kind = detectFileKind(book);
         let next = prepare(book, kind, { ...base, book, kind, file });
@@ -296,7 +314,7 @@ function UploadsPage({ uploads, aliases, sources, onChanged }: { uploads: Upload
       >
         <Upload size={22} />
         <strong>Перетащите файлы .xlsx / .xlsm сюда или нажмите, чтобы выбрать</strong>
-        <small>Закрытые сделки по подразделениям · Расчёт ТКП · Номера заказов · Расценки · Выпуск СЗ · Выпуск сторонних цехов</small>
+        <small>Закрытые сделки по подразделениям · Расчёт ТКП · Номера заказов · Расценки · Выпуск СЗ · Выпуск сторонних цехов · Выпуск продукции (лист «Акты»)</small>
         <input type="file" accept=".xlsx,.xlsm" multiple hidden onChange={e => { if (e.target.files) void addFiles(e.target.files); e.target.value = ''; }} />
       </label>
 
@@ -572,7 +590,7 @@ function ClosePanel({ c, data, period }: { c: Consolidation; data: WorkspaceData
   const items = closeChecklist(data, c, period);
   const problems = items.filter(i => i.state !== 'ok').length;
   return (
-    <details className="panel" open={problems > 0}>
+    <details className="panel">
       <summary><b>Закрытие месяца: {monthLabel(period)}</b> — {problems ? `требует внимания: ${problems}` : 'всё загружено'}</summary>
       <div className="checklist">{items.map(i => (
         <div key={i.label} className={i.state === 'missing' ? 'login-error' : ''}>
@@ -661,7 +679,6 @@ function RegisterPage({ c, data, onChanged }: { c: Consolidation; data: Workspac
         <div className="kpi-card"><span>Маржа факт</span><strong className={'kpi-value ' + (neg(t.profitFact) ?? '')}>{money(t.profitFact)}</strong><small>рентабельность {pct(ratio(t.profitFact, t.revenueFact))}</small></div>
         <div className="kpi-card"><span>Вес факт</span><strong className="kpi-value">{kg(t.weightFactKg)} кг</strong><small>план {kg(t.weightPlanKg)} кг</small></div>
       </div>
-      <ClosePanel c={c} data={data} period={period === 'all' ? c.periods[c.periods.length - 1] ?? null : period} />
       <SummaryPanel rows={visible} />
       <div className="filters">
         <div className="search-box"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск: ОПП, Б24, заказчик, шифр бака" aria-label="Поиск" /></div>
@@ -735,6 +752,7 @@ function RegisterPage({ c, data, onChanged }: { c: Consolidation; data: Workspac
         Суммы сделки без привязки к баку распределяются по шифрам пропорционально стоимости МК из ТКП. ОМТС — справочно, в себестоимость не входит.</small></p>
       <MatchReview kind="deal" title="Сделки без ссылки на Б24" items={c.unmatchedDealNames} candidates={refCandidates} onSaved={onChanged}
         toAlias={(item, candidate) => { const b24 = Number(/^\s*(\d+)/.exec(candidate)?.[1]); return b24 ? { from: dealNameKey(item), to: b24 } : null; }} />
+      <ClosePanel c={c} data={data} period={period === 'all' ? c.periods[c.periods.length - 1] ?? null : period} />
     </>
   );
 }
@@ -904,6 +922,7 @@ function AssistantPage({ c }: { c: Consolidation }) {
 const SHEET_KINDS: Array<{ kind: SheetSource['kind']; label: string }> = [
   { kind: 'reference', label: 'Номера заказов' },
   { kind: 'weights', label: 'Веса по шифрам ОПП' },
+  { kind: 'acts', label: 'Выпуск продукции по цехам (лист «Акты», кг)' },
 ];
 
 const base64ToBuffer = (b64: string): ArrayBuffer => {
@@ -925,6 +944,17 @@ function GoogleSheetsPanel({ sources, onChanged }: { sources: SheetSource[]; onC
     setStatus(s => ({ ...s, [kind]: 'Скачиваем таблицу…' }));
     try {
       await api.post('/api/sources', { kind, url });
+      if (kind === 'acts') {
+        // Файл большой: лист «Акты» читает сервер и возвращает только свёртку.
+        const res = await api.post('/api/gsheet/acts', { url });
+        const acts = (res.data as { acts: ActsFile }).acts;
+        const p = prepareActs(acts, { id: kind, fileName: acts.fileName, status: 'reading', kind, summary: '', issues: [], department: '', period: '' });
+        if (p.status !== 'ready') throw new Error(p.error ?? 'Лист «Акты» пуст.');
+        await api.post('/api/uploads', { kind, fileName: 'Google: ' + acts.fileName, department: '', period: '', payload: acts, rowCount: p.rowCount, sourceUrl: url });
+        setStatus(s => ({ ...s, [kind]: 'Загружено: ' + p.summary }));
+        await onChanged();
+        return;
+      }
       const res = await api.post('/api/gsheet', { url });
       const { fileName, base64 } = res.data as { fileName: string; base64: string };
       const book = await readWorkbookBuffer(base64ToBuffer(base64), fileName);
@@ -1044,8 +1074,122 @@ function OutputTotalsRow({ label, rows }: { label: string; rows: OutputRow[] }) 
   );
 }
 
-/** Финрез по выпуску завода по месяцам: цены из «Расчёта цен для выручки» × вес выпуска по шифрам. */
-function OutputPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
+/** Финрез по выпуску: по общему выпуску по цехам («Выпуск продукции», лист «Акты»), а пока он не загружен — по «Выпуску СЗ». */
+function OutputPage({ data, weights, acts }: { data: WorkspaceData; weights: WeightsFile | null; acts: ActsFile | null }) {
+  return acts ? <WorkshopOutputPage data={data} weights={weights} acts={acts} /> : <OwnOutputPage data={data} weights={weights} />;
+}
+
+const tByGroup = (g: WorkshopGroup) => (g === 'own' ? 0 : g === 'ext_our_metal' ? 1 : 2);
+
+function workshopMatrix(rows: WorkshopRow[]): Matrix {
+  return {
+    head: ['Месяц', 'Юр лицо', 'Группа', 'Цех', 'Шифр ОПП', 'Б24', 'Заказчик', 'Выпуск брутто, т', 'Цена, ₽/т', 'Выручка по выпуску, ₽',
+      'Металл, ₽ с НДС', 'Металл — оценка', 'Коэф./расценка, ₽/кг', 'Переработка, ₽', 'Финрез, ₽', 'Рентабельность', 'Замечание'],
+    rows: rows.map(r => [r.month, r.legal, WORKSHOP_GROUP_LABELS[r.group], r.workshop, r.opp, r.b24, r.customer, r.outputT, r.pricePerT, r.revenue,
+      r.metalRub, r.metalEstimated ? 'да' : '', r.rate, r.processingRub, r.result, r.margin, r.issue]),
+    widths: [10, 16, 26, 22, 9, 8, 30, 12, 12, 16, 16, 8, 10, 16, 16, 10, 40],
+  };
+}
+
+function WorkshopOutputPage({ data, weights, acts }: { data: WorkspaceData; weights: WeightsFile | null; acts: ActsFile }) {
+  const src = useSource();
+  const prices = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])])), [data, weights]);
+  const all = useMemo(() => outputByWorkshops(acts, data.prodOwn ?? [], data.prodExt ?? [], prices, data.rates, data.reference ?? [], data.contractorAliases),
+    [acts, data, prices]);
+  const months = acts.periods;
+  const [month, setMonth] = useState('');
+  const [group, setGroup] = useState<'all' | WorkshopGroup>('all');
+  const [workshop, setWorkshop] = useState('');
+  const [onlyPriced, setOnlyPriced] = useState(false);
+  const [search, setSearch] = useState('');
+  const current = month || months[months.length - 1] || 'all';
+  const inMonth = all.filter(r => (current === 'all' || r.month === current) && (group === 'all' || r.group === group));
+  const workshops = Array.from(new Set(inMonth.map(r => r.workshop))).sort((a, b) => a.localeCompare(b, 'ru'));
+  const rows = inMonth.filter(r => (!workshop || r.workshop === workshop) && (!onlyPriced || r.pricePerT !== null)
+    && `${r.opp ?? ''} ${r.customer} ${r.workshop}`.toLowerCase().includes(search.toLowerCase()));
+  const t = workshopTotals(rows);
+  const byShop = new Map<string, WorkshopRow[]>();
+  for (const r of rows) byShop.set(`${r.group}|${r.workshop}`, [...(byShop.get(`${r.group}|${r.workshop}`) ?? []), r]);
+  const shops = Array.from(byShop.entries()).map(([k, list]) => ({ k, group: list[0].group, workshop: list[0].workshop, list, t: workshopTotals(list) }))
+    .sort((a, b) => tByGroup(a.group) - tByGroup(b.group) || (b.t.outputT ?? 0) - (a.t.outputT ?? 0));
+  const actsSrc: SourceRef = { kind: 'acts' };
+  const totalCells = (x: ReturnType<typeof workshopTotals>) => (<>
+    <td>{t3(x.outputT)}</td><td>{money(x.revenue)}</td><td>{money(x.metalRub)}</td><td>{money(x.processingRub)}</td>
+    <td className={neg(x.result)}>{money(x.result)}</td><td className={neg(x.result)}>{pct(x.margin)}</td>
+  </>);
+  return (
+    <>
+      <Heading eyebrow="ФИНРЕЗ ПО ВЫПУСКУ" title="Финрез по выпуску по цехам"
+        text="Выпуск — «Выпуск продукции», лист «Акты»: тоннаж брутто для выручки, кг → т. Выручка = выпуск × цена за тонну из «Расчёта цен для выручки». Завод: металл — «Сумма всего с НДС» из «Выпуска СЗ» (по шифру за месяц, распределена по цехам пропорционально выпуску), переработка = выпуск × коэффициент месяца. Сторонние из нашего металла: переработка = выпуск × расценка подрядчика, металл — оценка по «Выпуску сторонних цехов». Сторонние на своём металле — только выручка: их затраты в «Переразмещениях» Комплектации."
+        actions={<>
+          <button className="btn-secondary" disabled={!rows.length} onClick={() => void downloadXlsx(workshopMatrix(rows), 'Финрез по цехам', 'MONOLITH-Finrez-po-cekham.xlsx')}><Download size={16} /> Excel</button>
+          <button className="btn-secondary" disabled={!rows.length} onClick={() => downloadCsv(workshopMatrix(rows), 'MONOLITH-Finrez-po-cekham.csv')}><Download size={16} /> CSV</button>
+        </>} />
+      {!data.rates && <div className="bottom-note">Не загружены «Расценки»: переработка не рассчитывается.</div>}
+      {!data.prodOwn?.length && <div className="bottom-note">Не загружен «Выпуск СЗ по месяцам»: металл завода не рассчитывается.</div>}
+      <div className="kpi-grid">
+        <div className="kpi-card"><span>Выпуск брутто</span><strong className="kpi-value">{t3(t.outputT)} т</strong></div>
+        <div className="kpi-card"><span>Выручка по выпуску</span><strong className="kpi-value">{money(t.revenue)}</strong></div>
+        <div className="kpi-card"><span>Металл + переработка</span><strong className="kpi-value">{money((t.metalRub ?? 0) + (t.processingRub ?? 0))}</strong></div>
+        <div className="kpi-card"><span>Финрез</span><strong className={'kpi-value ' + (neg(t.result) ?? '')}>{money(t.result)}</strong><small>рентабельность {pct(t.margin)}</small></div>
+      </div>
+      <div className="filters">
+        <div className="search-box"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск: ОПП, заказчик, цех" aria-label="Поиск" /></div>
+        <select value={current} onChange={e => setMonth(e.target.value)} aria-label="Месяц выпуска">
+          <option value="all">Все месяцы</option>
+          {[...months].reverse().map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+        <select value={group} onChange={e => { setGroup(e.target.value as 'all' | WorkshopGroup); setWorkshop(''); }} aria-label="Группа цехов">
+          <option value="all">Все цеха</option>
+          {(Object.keys(WORKSHOP_GROUP_LABELS) as WorkshopGroup[]).map(g => <option key={g} value={g}>{WORKSHOP_GROUP_LABELS[g]}</option>)}
+        </select>
+        <select value={workshop} onChange={e => setWorkshop(e.target.value)} aria-label="Цех">
+          <option value="">Любой цех</option>
+          {workshops.map(w => <option key={w} value={w}>{w}</option>)}
+        </select>
+        <label className="check-label"><input type="checkbox" checked={onlyPriced} onChange={e => setOnlyPriced(e.target.checked)} /> Только шифры с ценой</label>
+        <span className="result-count">{rows.length} стр.</span>
+      </div>
+      <section className="panel">
+        <div className="panel-heading"><div><h2>По цехам</h2><p>{current === 'all' ? 'Все месяцы' : monthLabel(current)}. Финрез и рентабельность — по строкам, где рассчитаны и выручка, и затраты.</p></div></div>
+        <div className="table-wrap"><table className="register-table">
+          <thead><tr><th>Группа</th><th>Цех</th><th>Выпуск, т</th><th>Выручка</th><th>Металл, ₽</th><th>Переработка</th><th>Финрез</th><th>Рент.</th></tr></thead>
+          <tbody>
+            <tr className="total-row"><td colSpan={2}>Итого{t.incomplete ? <small> не рассчитано строк: {t.incomplete}</small> : null}</td>{totalCells(t)}</tr>
+            {shops.map(s => (
+              <tr key={s.k} className="row-clickable" onClick={() => setWorkshop(s.workshop === workshop ? '' : s.workshop)}>
+                <td><small>{WORKSHOP_GROUP_LABELS[s.group]}</small></td><td><strong>{s.workshop || '—'}</strong></td>{totalCells(s.t)}
+              </tr>
+            ))}
+          </tbody>
+        </table></div>
+      </section>
+      <div className="table-wrap register-wrap"><table className="register-table">
+        <thead><tr>
+          <th>Месяц</th><th>Цех</th><th>Шифр ОПП</th><th>Заказчик</th><th>Выпуск, т</th><th>Цена, ₽/т</th><th>Выручка</th>
+          <th>Металл, ₽ с НДС</th><th>Коэф./расценка, ₽/кг</th><th>Переработка</th><th>Финрез</th><th>Рент.</th>
+        </tr></thead>
+        <tbody>
+          {rows.slice(0, 1500).map(r => (
+            <tr key={r.key}>
+              <td>{monthLabel(r.month)}</td><td><small>{r.workshop}</small></td><td><strong>{r.opp ?? '—'}</strong></td>
+              <td className="tanks-cell">{r.customer || '—'}{r.issue && <small className="login-error">{r.issue}</small>}</td>
+              <td {...src(actsSrc)}>{t3(r.outputT)}</td><td {...src(tkpSrc(r.b24))}>{money(r.pricePerT)}</td><td {...src(tkpSrc(r.b24))}>{money(r.revenue)}</td>
+              <td {...src(r.group === 'own' ? { kind: 'prod_own' } : { kind: 'prod_ext' })}>{money(r.metalRub)}{r.metalEstimated && r.metalRub !== null ? <small>оценка</small> : null}</td>
+              <td {...src(r.rate !== null ? { kind: 'rates' } : null)}>{r.rate === null ? '—' : num1(r.rate)}</td><td {...src(r.rate !== null ? { kind: 'rates' } : null)}>{money(r.processingRub)}</td>
+              <td className={neg(r.result)}>{money(r.result)}</td><td className={neg(r.result)}>{pct(r.margin)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
+      {rows.length > 1500 && <p className="register-note"><small>Показаны первые 1500 строк; полностью — в выгрузке Excel.</small></p>}
+      <p className="register-note"><small>Источник выпуска: {acts.fileName}, лист «{acts.sheet}», {acts.actRows} актов. Выпуск — «Тоннаж брутто (для выручки)». «Металл — оценка»: выпуск × средняя сумма списания на тонну по шифру из «Выпуска сторонних цехов».</small></p>
+    </>
+  );
+}
+
+/** Финрез по выпуску завода по месяцам (пока не загружен «Выпуск продукции»): цены из «Расчёта цен для выручки» × вес выпуска по шифрам. */
+function OwnOutputPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
   const src = useSource();
   const prices = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])])), [data, weights]);
   const all = useMemo(() => outputFinres(data.prodOwn ?? [], prices, data.rates, data.reference ?? []), [data, prices]);

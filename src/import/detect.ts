@@ -6,7 +6,7 @@ import { isTkpWorkbook } from './tkp';
 import { isWeightsWorkbook } from './weights';
 import type { Workbook } from './sheet';
 
-export type FileKind = 'reference' | 'rates' | 'prod_own' | 'prod_ext' | 'department' | 'tkp' | 'weights' | 'unknown';
+export type FileKind = 'reference' | 'rates' | 'prod_own' | 'prod_ext' | 'department' | 'tkp' | 'weights' | 'acts' | 'unknown';
 
 export const FILE_KIND_LABELS: Record<FileKind, string> = {
   reference: 'Справочник «Номера заказов»',
@@ -16,6 +16,7 @@ export const FILE_KIND_LABELS: Record<FileKind, string> = {
   department: 'Закрытые сделки подразделения',
   tkp: 'Расчёт ТКП (план МК)',
   weights: 'Веса по шифрам ОПП',
+  acts: 'Выпуск продукции по цехам (лист «Акты»)',
   unknown: 'Не распознан',
 };
 

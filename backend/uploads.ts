@@ -7,7 +7,7 @@ const UPLOAD_LOG = 'upload_log';
 const ALIASES = 'aliases';
 /** Leaves headroom under the 256 KiB per-item database limit. */
 const MAX_PAYLOAD_CHARS = 230_000;
-const KINDS = ['reference', 'rates', 'prod_own', 'prod_ext', 'department', 'tkp', 'weights'] as const;
+const KINDS = ['reference', 'rates', 'prod_own', 'prod_ext', 'department', 'tkp', 'weights', 'acts'] as const;
 type Kind = typeof KINDS[number];
 
 type UploadBody = {

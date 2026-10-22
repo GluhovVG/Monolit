@@ -434,3 +434,106 @@ describe('сделки без ТКП, справочно сторонние, с�
     assert.equal(findUpload(ups, { kind: 'tkp', b24: 9 }), undefined);
   });
 });
+
+describe('«Выпуск продукции» (лист «Акты») и финрез по цехам', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const { actPeriod, hasActsSheet, readActs } = await import('../src/import/acts.ts');
+  const { outputByWorkshops, workshopTotals } = await import('../src/domain/output-workshops.ts');
+
+  /** Minimal .xlsx (zip, deflate) builder for synthetic fixtures. */
+  function zip(files: Record<string, string>): Uint8Array {
+    const enc = new TextEncoder();
+    const locals: Uint8Array[] = [];
+    const central: Uint8Array[] = [];
+    let offset = 0;
+    for (const [name, text] of Object.entries(files)) {
+      const n = enc.encode(name);
+      const data = deflateRawSync(enc.encode(text));
+      const lh = new Uint8Array(30 + n.length);
+      const lv = new DataView(lh.buffer);
+      lv.setUint32(0, 0x04034b50, true); lv.setUint16(8, 8, true); lv.setUint32(18, data.length, true); lv.setUint16(26, n.length, true);
+      lh.set(n, 30);
+      const ch = new Uint8Array(46 + n.length);
+      const cv = new DataView(ch.buffer);
+      cv.setUint32(0, 0x02014b50, true); cv.setUint16(10, 8, true); cv.setUint32(20, data.length, true); cv.setUint16(28, n.length, true); cv.setUint32(42, offset, true);
+      ch.set(n, 46);
+      locals.push(lh, data);
+      central.push(ch);
+      offset += lh.length + data.length;
+    }
+    const cdSize = central.reduce((s, c) => s + c.length, 0);
+    const end = new Uint8Array(22);
+    const ev = new DataView(end.buffer);
+    ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, central.length, true); ev.setUint16(10, central.length, true); ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+    const parts = [...locals, ...central, end];
+    const out = new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
+    let p = 0;
+    for (const part of parts) { out.set(part, p); p += part.length; }
+    return out;
+  }
+  const strings = ['Период', 'Юр лицо', 'Подразделение', 'Шифр', 'Заказчик', 'Тоннаж брутто (для выручки)', 'СЗ КВОиТ', 'КВО', 'МКиРР', 'Сторонние из н/м', 'Опора', 'ООО Альфа', 'Сторонние', 'Промтех'];
+  const s = (i: number, ref: string) => `<c r="${ref}" t="s"><v>${i}</v></c>`;
+  const n = (v: number, ref: string) => `<c r="${ref}"><v>${v}</v></c>`;
+  const row = (r: number, period: number, legal: number, dept: number, opp: number, kg: number) =>
+    `<row r="${r}">${n(period, 'A' + r)}${s(legal, 'B' + r)}${s(dept, 'C' + r)}${n(opp, 'D' + r)}${s(11, 'E' + r)}<c r="F${r}" s="3" />${n(kg, 'G' + r)}</row>`;
+  const sheet = `<worksheet><sheetData><row r="1">${[0, 1, 2, 3, 4].map(i => s(i, 'ABCDE'[i] + 1)).join('')}${s(5, 'G1')}</row>`
+    + row(2, 2026.01, 6, 7, 501, 1000) + row(3, 2026.01, 6, 8, 501, 3000) + row(4, 2026.01, 9, 10, 501, 2000)
+    + row(5, 2026.1, 12, 13, 501, 500) + row(6, 2026.01, 6, 7, 501, 500)
+    + '<row r="7" s="2"/><row r="8"/>' + `<row r="9">${n(7000, 'G9')}</row></sheetData></worksheet>`;
+  const book = zip({
+    'xl/workbook.xml': '<workbook><sheets><sheet name="Свод" sheetId="1" r:id="rId1"/><sheet name="Акты" sheetId="2" r:id="rId2"/></sheets></workbook>',
+    'xl/_rels/workbook.xml.rels': '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>',
+    'xl/sharedStrings.xml': '<sst>' + strings.map(x => `<si><t>${x}</t></si>`).join('') + '</sst>',
+    'xl/worksheets/sheet1.xml': '<worksheet/>',
+    'xl/worksheets/sheet2.xml': sheet,
+  });
+
+  it('периоды: 2026.01 → 2026-01, 2026.1 → 2026-10', () => {
+    assert.equal(actPeriod(2026.01), '2026-01');
+    assert.equal(actPeriod(2026.1), '2026-10');
+    assert.equal(actPeriod(2026.12), '2026-12');
+    assert.equal(actPeriod(null), null);
+  });
+
+  it('читает лист «Акты» и группирует по месяц × юр. лицо × цех × шифр, итоговую строку пропускает', async () => {
+    assert.equal(await hasActsSheet(book), true);
+    const acts = await readActs(book, 'Выпуск продукции.xlsx');
+    assert.deepEqual(acts.rows, [
+      ['2026-01', 'СЗ КВОиТ', 'КВО', 501, 1500], ['2026-01', 'СЗ КВОиТ', 'МКиРР', 501, 3000],
+      ['2026-01', 'Сторонние из н/м', 'Опора', 501, 2000], ['2026-10', 'Сторонние', 'Промтех', 501, 500],
+    ]);
+    assert.equal(acts.actRows, 5);
+    assert.equal(acts.customers['501'], 'ООО Альфа');
+    assert.equal(acts.notes.length, 1);
+  });
+
+  it('финрез по цехам: металл СЗ делится по цехам, сторонние из н/м — по расценке, сторонние — только выручка', async () => {
+    const acts = await readActs(book, 'x.xlsx');
+    const prices = [{ opp: 501, b24: 1001, customer: 'ООО Альфа', pricePerT: 100000 } as never];
+    const own = [{ opp: 501, order: 'з', month: '2026-01', workshop: 'СЗ', outputT: 4.5, metalT: 4, metalRub: 0, totalRub: 270000 }];
+    const ext = [{ opp: 501, order: 'з', month: null, workshop: 'подрядчик Опора', outputT: 2, metalT: 2, metalRub: 0, totalRub: 100000 }];
+    const rates = { ownByMonth: { '2026-01': 20 }, contractor: { опора: 40 }, contractorLabels: {}, conflicts: [] };
+    const rows = outputByWorkshops(acts, own, ext, prices, rates, []);
+    const kvo = rows.find(r => r.workshop === 'КВО')!;
+    assert.equal(kvo.revenue, 150000);
+    assert.equal(kvo.metalRub, 90000);
+    assert.equal(kvo.processingRub, 30000);
+    assert.equal(kvo.result, 30000);
+    const opora = rows.find(r => r.workshop === 'Опора')!;
+    assert.equal(opora.metalRub, 100000);
+    assert.equal(opora.metalEstimated, true);
+    assert.equal(opora.processingRub, 80000);
+    assert.equal(opora.result, 20000);
+    const promteh = rows.find(r => r.workshop === 'Промтех')!;
+    assert.equal(promteh.revenue, 50000);
+    assert.equal(promteh.result, null);
+    const t = workshopTotals(rows);
+    assert.equal(t.outputT, 7);
+    assert.equal(t.result, 30000 + 60000 + 20000);
+  });
+
+  it('backend/acts.ts совпадает с src/import/acts.ts', async () => {
+    const { readFileSync } = await import('node:fs');
+    assert.equal(readFileSync(new URL('../backend/acts.ts', import.meta.url), 'utf8'), readFileSync(new URL('../src/import/acts.ts', import.meta.url), 'utf8'));
+  });
+});

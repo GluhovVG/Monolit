@@ -1760,3 +1760,5 @@ td small {
 
 .src-cell { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
 .src-cell:hover { background: rgba(127, 127, 127, 0.1); }
+.row-clickable { cursor: pointer; }
+.row-clickable:hover td { background: rgba(127, 127, 127, 0.08); }

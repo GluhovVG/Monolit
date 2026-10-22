@@ -8,7 +8,7 @@ import { db, error, json, storage, type RouterContext } from '@appdeploy/sdk';
 const UPLOADS = 'uploads';
 /** Base64 of a ~4 MB file: stays under the 6 MB request limit of the function. */
 const MAX_BASE64_CHARS = 5_600_000;
-export const UPLOAD_ID = /^(reference|rates|prod_own|prod_ext|weights|dept_[0-9a-f]{8}|tkp_\d{3,7})$/;
+export const UPLOAD_ID = /^(reference|rates|prod_own|prod_ext|weights|acts|dept_[0-9a-f]{8}|tkp_\d{3,7})$/;
 
 const CONTENT_TYPES: Record<string, string> = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

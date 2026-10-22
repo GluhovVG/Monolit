@@ -1,4 +1,5 @@
 import { db, error, json, type RouterContext } from '@appdeploy/sdk';
+import { readActs } from './acts';
 
 /**
  * Google Таблицы как источник «Номеров заказов» и весов.
@@ -6,10 +7,12 @@ import { db, error, json, type RouterContext } from '@appdeploy/sdk';
  * разбор делает браузер тем же кодом, что и для загруженных файлов.
  */
 const SOURCES = 'sources';
-const KINDS = ['reference', 'weights'] as const;
+const KINDS = ['reference', 'weights', 'acts'] as const;
 type Kind = typeof KINDS[number];
 /** Base64 grows the file by a third; keep the response under the 6 MB function limit. */
 const MAX_BYTES = 4_000_000;
+/** «Выпуск продукции» читается на сервере, наружу уходит только свёртка. */
+const MAX_ACTS_BYTES = 40_000_000;
 
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
@@ -36,12 +39,8 @@ function fileNameFrom(disposition: string | null, fallback: string): string {
   return plain ? plain[1] : fallback;
 }
 
-export async function fetchGoogleSheet(ctx: RouterContext) {
-  const body = (ctx.body ?? {}) as { url?: unknown };
-  const url = str(body.url, 600);
-  const id = googleFileId(url);
-  if (!id) return error('Нужна ссылка на Google Таблицу (docs.google.com/spreadsheets/d/…).', 400);
-  // Native Google Sheet → export; an .xlsx stored on Drive → direct download.
+/** Скачивает файл по ссылке Google: таблица Google → экспорт .xlsx; .xlsx на Диске → прямая загрузка. */
+async function downloadXlsx(id: string, maxBytes: number): Promise<{ bytes: Uint8Array; fileName: string } | { tooBig: true } | null> {
   const candidates = [
     `https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx`,
     `https://drive.google.com/uc?export=download&id=${id}`,
@@ -52,16 +51,48 @@ export async function fetchGoogleSheet(ctx: RouterContext) {
       const type = res.headers.get('content-type') ?? '';
       if (!res.ok || type.includes('text/html')) continue;
       const bytes = new Uint8Array(await res.arrayBuffer());
-      if (bytes.length > MAX_BYTES) return error('Таблица больше 4 МБ — сократите её или загрузите файлом.', 413);
+      if (bytes.length > maxBytes) return { tooBig: true };
       // xlsx is a zip archive: it starts with «PK».
       if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) continue;
       const fileName = fileNameFrom(res.headers.get('content-disposition'), 'Google таблица.xlsx');
-      return json({ fileName: /\.xls[xm]$/i.test(fileName) ? fileName : fileName + '.xlsx', base64: toBase64(bytes) });
+      return { bytes, fileName: /\.xls[xm]$/i.test(fileName) ? fileName : fileName + '.xlsx' };
     } catch (cause) {
       console.error('Google Sheets download failed', cause);
     }
   }
-  return error('Не удалось скачать таблицу. Откройте доступ «Все, у кого есть ссылка» (просмотр) и проверьте ссылку.', 502);
+  return null;
+}
+
+const NOT_DOWNLOADED = 'Не удалось скачать таблицу. Откройте доступ «Все, у кого есть ссылка» (просмотр) и проверьте ссылку.';
+
+export async function fetchGoogleSheet(ctx: RouterContext) {
+  const body = (ctx.body ?? {}) as { url?: unknown };
+  const url = str(body.url, 600);
+  const id = googleFileId(url);
+  if (!id) return error('Нужна ссылка на Google Таблицу (docs.google.com/spreadsheets/d/…).', 400);
+  const file = await downloadXlsx(id, MAX_BYTES);
+  if (!file) return error(NOT_DOWNLOADED, 502);
+  if ('tooBig' in file) return error('Таблица больше 4 МБ — сократите её или загрузите файлом.', 413);
+  return json({ fileName: file.fileName, base64: toBase64(file.bytes) });
+}
+
+/**
+ * «Выпуск продукции» по ссылке: файл большой (~7 МБ), поэтому сервер сам читает лист «Акты»
+ * и возвращает только сгруппированный выпуск (месяц × юр. лицо × цех × шифр, кг).
+ */
+export async function fetchActs(ctx: RouterContext) {
+  const body = (ctx.body ?? {}) as { url?: unknown };
+  const url = str(body.url, 600);
+  const id = googleFileId(url);
+  if (!id) return error('Нужна ссылка на файл Google (docs.google.com/spreadsheets/d/… или drive.google.com/file/d/…).', 400);
+  const file = await downloadXlsx(id, MAX_ACTS_BYTES);
+  if (!file) return error(NOT_DOWNLOADED, 502);
+  if ('tooBig' in file) return error('Файл больше 40 МБ.', 413);
+  try {
+    return json({ acts: await readActs(file.bytes, file.fileName) });
+  } catch (cause) {
+    return error(cause instanceof Error ? cause.message : 'Не удалось прочитать лист «Акты».', 422);
+  }
 }
 
 export async function listSources() {
