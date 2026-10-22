@@ -351,3 +351,28 @@ describe('weights file «Веса» in blocks by ОПП', () => {
     assert.ok(w.notes!.some(n => n.includes('502')));
   });
 });
+
+describe('financial result by output (monthly)', () => {
+  it('revenue = output × price per tonne; processing = output × 1000 × month coefficient', async () => {
+    const { outputFinres, outputTotals } = await import('../src/domain/output-finres.ts');
+    const ref = parseReference(reference);
+    const prices = revenuePrices([parseTkp(tkpBook)], ref, null); // 501: 600 000 ₽ / 3 т = 200 000 ₽/т
+    const rows = outputFinres(parseProduction(own).rows, prices, parseRates(rates), ref);
+    const jan = rows.find(r => r.month === '2026-01' && r.opp === 501)!;
+    assert.equal(jan.outputT, 2);
+    assert.equal(jan.revenue, 2 * 200000);
+    assert.equal(jan.writeOffRub, 200000);
+    assert.equal(jan.processingRub, 2 * 1000 * 50);
+    assert.equal(jan.result, 400000 - 200000 - 100000);
+    const oct = rows.find(r => r.month === '2026-10')!;
+    assert.equal(oct.processingRub, 1 * 1000 * 47.5);
+    // No price → revenue and result are not calculated (null), not zero.
+    const noPrice = outputFinres(parseProduction(own).rows, [], parseRates(rates), ref);
+    assert.equal(noPrice[0].revenue, null);
+    assert.equal(noPrice[0].result, null);
+    assert.ok(noPrice[0].issue.includes('нет цены'));
+    const t = outputTotals(rows);
+    assert.equal(t.outputT, 3);
+    assert.equal(t.margin, t.result! / t.revenue!);
+  });
+});

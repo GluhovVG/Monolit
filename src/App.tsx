@@ -32,6 +32,7 @@ import {
   Factory,
   Table2,
   Calculator,
+  TrendingUp,
   Sparkles,
 } from 'lucide-react';
 
@@ -41,7 +42,7 @@ const money = (n: number) =>
 const pct = (n: number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(n) + '%';
 const periodOptions = periods;
-const OPERATIONS_PAGES: OperationsPage[] = ['uploads', 'register', 'prices', 'production', 'assistant'];
+const OPERATIONS_PAGES: OperationsPage[] = ['uploads', 'register', 'prices', 'output', 'production', 'assistant'];
 /** Russian plural: plural(5, ['сделка', 'сделки', 'сделок']) → 'сделок'. */
 const plural = (n: number, forms: [string, string, string]) => {
   const mod10 = n % 10;
@@ -341,6 +342,7 @@ function Workspace({
     { id: 'uploads', label: 'Загрузка файлов', icon: Upload },
     { id: 'register', label: 'Реестр сделок', icon: Table2 },
     { id: 'prices', label: 'Расчёт цен для выручки', icon: Calculator },
+    { id: 'output', label: 'Финрез по выпуску', icon: TrendingUp },
     { id: 'production', label: 'Производство МК', icon: Factory },
     { id: 'assistant', label: 'ИИ-помощник', icon: Sparkles },
     { id: 'dashboard', label: 'Дашборд 2025', icon: LayoutDashboard },

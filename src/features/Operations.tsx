@@ -7,6 +7,7 @@ import {
 } from '../domain/consolidate';
 import type { MkLine } from '../domain/mk-production';
 import { revenuePrices, type PriceRow } from '../domain/revenue-prices';
+import { outputFinres, outputTotals, type OutputRow } from '../domain/output-finres';
 import {
   blockTotals, departmentFromFileName, detectDepartmentMapping, extractDepartmentDeals, sanitizeMapping, sheetPreview,
   type AiMappingProposal, type DepartmentDeal, type DepartmentMapping,
@@ -24,7 +25,7 @@ import { closeChecklist } from '../domain/close-checklist';
 import { customerKey, summarize, type SummaryLine } from '../domain/summary';
 import { buildAiContext, loadWorkspace, packProduction, packReference, type Alias, type SheetSource, type UploadMeta } from './workspace';
 
-export type OperationsPage = 'uploads' | 'register' | 'prices' | 'production' | 'assistant';
+export type OperationsPage = 'uploads' | 'register' | 'prices' | 'output' | 'production' | 'assistant';
 
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 const money = (n: number | null | undefined) => (n === null || n === undefined ? '—' : rub.format(n));
@@ -63,6 +64,7 @@ export function Operations({ page }: { page: OperationsPage }) {
   if (!state || !consolidation) return <p role="status">Загружаем данные…</p>;
   if (page === 'uploads') return <UploadsPage uploads={state.uploads} aliases={state.aliases} sources={state.sources} onChanged={reload} />;
   if (page === 'prices') return <PricesPage data={state.data} weights={state.weights} />;
+  if (page === 'output') return <OutputPage data={state.data} weights={state.weights} />;
   if (page === 'register') return <RegisterPage c={consolidation} data={state.data} onChanged={reload} />;
   if (page === 'production') return <ProductionPage c={consolidation} data={state.data} onChanged={reload} />;
   return <AssistantPage c={consolidation} />;
@@ -970,6 +972,99 @@ function PricesPage({ data, weights }: { data: WorkspaceData; weights: WeightsFi
           ))}
         </tbody>
       </table></div>
+    </>
+  );
+}
+
+/* ───────────────────────── Financial result by output ───────────────────────── */
+
+const t3 = (n: number | null) => (n === null ? '—' : new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 3 }).format(n));
+
+function outputMatrix(rows: OutputRow[]): Matrix {
+  return {
+    head: ['Месяц', 'Шифр ОПП', 'Заказчик', 'РВС', 'Выпуск, т', 'Цена, ₽/т', 'Выручка по выпуску, ₽', 'Списание металла, т',
+      'Списание металла (сумма с НДС), ₽', 'Коэффициент СЗ, ₽/кг', 'Переработка (без металла), ₽', 'Финрез, ₽', 'Рентабельность', 'Замечание'],
+    rows: rows.map(r => [r.month, r.opp, r.customer, r.tanks.join('; '), r.outputT, r.pricePerT, r.revenue, r.metalT, r.writeOffRub,
+      r.coef, r.processingRub, r.result, r.margin, r.issue]),
+    widths: [10, 9, 28, 40, 10, 12, 16, 12, 18, 10, 16, 16, 10, 40],
+  };
+}
+
+function OutputTotalsRow({ label, rows }: { label: string; rows: OutputRow[] }) {
+  const t = outputTotals(rows);
+  return (
+    <tr className="total-row">
+      <td colSpan={4}>{label}{t.incomplete ? <small>не рассчитано строк: {t.incomplete}</small> : null}</td>
+      <td>{t3(t.outputT)}</td><td>{money(t.revenue !== null && t.outputT ? t.revenue / t.outputT : null)}</td><td>{money(t.revenue)}</td>
+      <td>{t3(t.metalT)}</td><td>{money(t.writeOffRub)}</td><td></td><td>{money(t.processingRub)}</td>
+      <td className={neg(t.result)}>{money(t.result)}</td><td className={neg(t.result)}>{pct(t.margin)}</td>
+    </tr>
+  );
+}
+
+/** Финрез по выпуску завода по месяцам: цены из «Расчёта цен для выручки» × вес выпуска по шифрам. */
+function OutputPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
+  const prices = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights), [data, weights]);
+  const all = useMemo(() => outputFinres(data.prodOwn ?? [], prices, data.rates, data.reference ?? []), [data, prices]);
+  const months = useMemo(() => Array.from(new Set(all.map(r => r.month).filter((m): m is string => m !== null))).sort(), [all]);
+  const [month, setMonth] = useState<string>('');
+  const [onlyPriced, setOnlyPriced] = useState(false);
+  const [search, setSearch] = useState('');
+  const current = month || months[months.length - 1] || 'all';
+  const rows = all.filter(r => (current === 'all' || r.month === current) && (!onlyPriced || r.pricePerT !== null)
+    && `${r.opp ?? ''} ${r.customer} ${r.tanks.join(' ')}`.toLowerCase().includes(search.toLowerCase()));
+  const byMonth = current === 'all' ? months.map(m => ({ m, list: rows.filter(r => r.month === m) })).filter(x => x.list.length) : [];
+  const t = outputTotals(rows);
+  return (
+    <>
+      <Heading eyebrow="ФИНРЕЗ ПО ВЫПУСКУ" title="Финрез по выпуску"
+        text="Выручка по выпуску = выпуск завода за месяц, т × цена за тонну из «Расчёта цен для выручки». Списание металла — вес и «Сумма всего с НДС» из отчёта о выпуске. Переработка (затраты без металла) = выпуск × 1000 × коэффициент месяца из «Расценок»."
+        actions={<>
+          <button className="btn-secondary" disabled={!rows.length} onClick={() => void downloadXlsx(outputMatrix(rows), 'Финрез по выпуску', 'MONOLITH-Finrez-po-vypusku.xlsx')}><Download size={16} /> Excel</button>
+          <button className="btn-secondary" disabled={!rows.length} onClick={() => downloadCsv(outputMatrix(rows), 'MONOLITH-Finrez-po-vypusku.csv')}><Download size={16} /> CSV</button>
+        </>} />
+      {!data.prodOwn?.length && <div className="bottom-note">Загрузите «Выпуск СЗ по месяцам».</div>}
+      {!data.rates && <div className="bottom-note">Не загружены «Расценки»: переработка не рассчитывается.</div>}
+      {!data.tkp.length && <div className="bottom-note">Нет «Расчётов ТКП»: цены за тонну неизвестны, выручка не рассчитывается.</div>}
+      <div className="kpi-grid">
+        <div className="kpi-card"><span>Выпуск</span><strong className="kpi-value">{t3(t.outputT)} т</strong></div>
+        <div className="kpi-card"><span>Выручка по выпуску</span><strong className="kpi-value">{money(t.revenue)}</strong></div>
+        <div className="kpi-card"><span>Металл + переработка</span><strong className="kpi-value">{money((t.writeOffRub ?? 0) + (t.processingRub ?? 0))}</strong></div>
+        <div className="kpi-card"><span>Финрез</span><strong className={'kpi-value ' + (neg(t.result) ?? '')}>{money(t.result)}</strong><small>рентабельность {pct(t.margin)}</small></div>
+      </div>
+      <div className="filters">
+        <div className="search-box"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск: ОПП, заказчик, РВС" aria-label="Поиск" /></div>
+        <select value={current} onChange={e => setMonth(e.target.value)} aria-label="Месяц выпуска">
+          <option value="all">Все месяцы</option>
+          {months.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+        <label className="check-label"><input type="checkbox" checked={onlyPriced} onChange={e => setOnlyPriced(e.target.checked)} /> Только шифры с ценой</label>
+        <span className="result-count">{rows.length} стр.</span>
+      </div>
+      <div className="table-wrap register-wrap"><table className="register-table">
+        <thead><tr>
+          <th>Месяц</th><th>Шифр ОПП</th><th>Заказчик</th><th>РВС</th><th>Выпуск, т</th><th>Цена, ₽/т</th><th>Выручка по выпуску</th>
+          <th>Металл, т</th><th>Металл, ₽ с НДС</th><th>Коэф. СЗ, ₽/кг</th><th>Переработка</th><th>Финрез</th><th>Рент.</th>
+        </tr></thead>
+        <tbody>
+          <OutputTotalsRow label={`Итого (${rows.length})`} rows={rows} />
+          {(byMonth.length ? byMonth : [{ m: current, list: rows }]).map(({ m, list }) => (
+            <Fragment key={m}>
+              {byMonth.length > 0 && <OutputTotalsRow label={monthLabel(m)} rows={list} />}
+              {list.map(r => (
+                <tr key={r.key}>
+                  <td>{monthLabel(r.month)}</td><td><strong>{r.opp ?? '—'}</strong></td><td>{r.customer || '—'}</td>
+                  <td className="tanks-cell"><small>{r.tanks.join('; ')}</small>{r.issue && <small className="login-error">{r.issue}</small>}</td>
+                  <td>{t3(r.outputT)}</td><td>{money(r.pricePerT)}</td><td>{money(r.revenue)}</td>
+                  <td>{t3(r.metalT)}</td><td>{money(r.writeOffRub)}</td><td>{r.coef === null ? '—' : num1(r.coef)}</td><td>{money(r.processingRub)}</td>
+                  <td className={neg(r.result)}>{money(r.result)}</td><td className={neg(r.result)}>{pct(r.margin)}</td>
+                </tr>
+              ))}
+            </Fragment>
+          ))}
+        </tbody>
+      </table></div>
+      <p className="register-note"><small>Считается выпуск собственного завода (отчёт «Выпуск СЗ по месяцам»). Выпуск сторонних цехов в отчёте без месяца, поэтому сюда не входит. Строки без цены или коэффициента не попадают в финрез и рентабельность итога.</small></p>
     </>
   );
 }
