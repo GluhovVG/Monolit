@@ -4,6 +4,8 @@ import { code, findColumn, lower, text, type Sheet, type Workbook } from './shee
 export type ReferenceRow = {
   b24: number | null;
   client: string;
+  /** «Товар» сделки (переносится на строки следующих баков). Пусто в старых загрузках. */
+  product?: string;
   tankCode: string;
   /** Заводской номер, e.g. «138/25». */
   factoryNo: string;
@@ -37,11 +39,13 @@ export function parseReference(book: Workbook): ReferenceRow[] {
     const header = sheet.rows[h];
     const cB24 = findColumn(header, x => x.replace(/^№/, '') === 'б24');
     const cClient = findColumn(header, x => x === 'наименование');
+    const cProduct = findColumn(header, x => x === 'товар');
     const cTank = findColumn(header, x => x.startsWith('шифр') && !x.includes('бухгалтерии'));
     const cOpp = findColumn(header, x => x.includes('шифр для бухгалтерии'));
     const cFactory = findColumn(header, x => x.startsWith('заводской номер'));
     let b24: number | null = null;
     let client = '';
+    let product = '';
     let lastOpp: { b24: number | null; type: string; opp: number } | null = null;
     for (const row of sheet.rows.slice(h + 1)) {
       if (!row || row.every(cell => text(cell) === '')) continue;
@@ -50,10 +54,13 @@ export function parseReference(book: Workbook): ReferenceRow[] {
       if (rowB24 !== null) {
         b24 = rowB24;
         client = rowClient;
+        product = '';
       } else if (rowClient) {
         b24 = null;
         client = rowClient;
+        product = '';
       }
+      if (!product && cProduct >= 0) product = text(row[cProduct]);
       const tankCode = cTank >= 0 ? text(row[cTank]) : '';
       let opp = cOpp >= 0 ? code(row[cOpp]) : null;
       if (!tankCode && opp === null) continue;
@@ -63,7 +70,7 @@ export function parseReference(book: Workbook): ReferenceRow[] {
       if (opp === null && lastOpp && lastOpp.b24 === b24 && type && lastOpp.type === type) opp = lastOpp.opp;
       if (opp !== null) lastOpp = { b24, type, opp };
       const factoryNo = cFactory >= 0 ? text(row[cFactory]).replace(/^№\s*/, '') : '';
-      result.push({ b24, client, tankCode, factoryNo, opp, sheet: sheet.name });
+      result.push({ b24, client, product, tankCode, factoryNo, opp, sheet: sheet.name });
     }
   }
   return result;

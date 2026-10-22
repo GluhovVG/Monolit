@@ -15,6 +15,8 @@ export type OutputRow = {
   key: string;
   month: string | null;
   opp: number | null;
+  /** Сделка Б24 (из «Расчёта цен») — для открытия ТКП. */
+  b24: number | null;
   customer: string;
   tanks: string[];
   outputT: number;
@@ -64,7 +66,7 @@ export function outputFinres(
       !refRows.length ? 'шифра нет в «Номерах заказов» (незавершённое производство)' : '',
     ].filter(Boolean);
     out.push({
-      key, month: a.month, opp: a.opp,
+      key, month: a.month, opp: a.opp, b24: price?.b24 ?? refRows[0]?.b24 ?? null,
       customer: (price?.customer || refRows[0]?.client || '').replace(/\s+/g, ' ').trim(),
       tanks: price?.tanks.length ? price.tanks : Array.from(new Set(refRows.map(r => r.tankCode))),
       outputT: a.outputT, pricePerT, revenue, metalT: a.metalT, writeOffRub: a.writeOffRub, coef, processingRub,
@@ -88,4 +90,31 @@ export function outputTotals(rows: readonly OutputRow[]) {
     processingRub: sum(r => r.processingRub), result: sum(r => r.result), margin: rev ? res / rev : null,
     incomplete: rows.length - complete.length,
   };
+}
+
+/** Справочно: выпуск сторонних цехов × цена за тонну (без месяца; в финрез не входит). */
+export type ExternalRefRow = { opp: number | null; b24: number | null; customer: string; workshops: string[]; outputT: number; pricePerT: number | null; revenue: number | null };
+
+export function externalReference(prodExt: readonly ProductionRow[], prices: readonly PriceRow[], reference: readonly ReferenceRow[]): ExternalRefRow[] {
+  const priceByOpp = new Map(prices.filter(p => p.opp !== null).map(p => [p.opp as number, p]));
+  const refByOpp = new Map<number, ReferenceRow>();
+  for (const r of reference) if (r.opp !== null && !refByOpp.has(r.opp)) refByOpp.set(r.opp, r);
+  const acc = new Map<string, ExternalRefRow>();
+  for (const row of prodExt) {
+    if (!row.outputT) continue;
+    const key = String(row.opp ?? row.order);
+    const price = row.opp !== null ? priceByOpp.get(row.opp) : undefined;
+    const ref = row.opp !== null ? refByOpp.get(row.opp) : undefined;
+    const a = acc.get(key) ?? {
+      opp: row.opp, b24: price?.b24 ?? ref?.b24 ?? null,
+      customer: (price?.customer || ref?.client || '').replace(/\s+/g, ' ').trim(), workshops: [], outputT: 0,
+      pricePerT: price?.pricePerT ?? null, revenue: null,
+    };
+    a.outputT += row.outputT;
+    const w = row.workshop.trim();
+    if (w && !a.workshops.includes(w)) a.workshops.push(w);
+    acc.set(key, a);
+  }
+  for (const a of acc.values()) a.revenue = a.pricePerT !== null ? a.outputT * a.pricePerT : null;
+  return Array.from(acc.values()).sort((x, y) => (x.opp ?? 1e9) - (y.opp ?? 1e9));
 }

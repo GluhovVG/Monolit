@@ -1757,3 +1757,6 @@ td small {
 .row-details table { font-size: 12px; }
 .check-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .register-note { margin-top: 10px; opacity: 0.85; }
+
+.src-cell { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.src-cell:hover { background: rgba(127, 127, 127, 0.1); }

@@ -394,3 +394,43 @@ describe('price weight priority', () => {
     assert.equal(r502.pricePerT, 200000 / 4);
   });
 });
+
+describe('сделки без ТКП, справочно сторонние, ссылки на источники', async () => {
+  const { dealsWithoutTkp } = await import('../src/domain/no-tkp.ts');
+  const { externalReference } = await import('../src/domain/output-finres.ts');
+  const { findUpload } = await import('../src/features/source-ref.ts');
+  const ref = parseReference(reference);
+
+  it('«Товар» переносится на строки баков', () => {
+    assert.equal(ref.find(r => r.b24 === 1001)?.product, 'РВС 1000');
+  });
+
+  it('выдаёт сделки с выпуском или закрытием, но без ТКП', () => {
+    const rows = dealsWithoutTkp(ref, [], new Map([[501, 2500]]), new Set([1002]));
+    assert.deepEqual(rows.map(r => [r.b24, r.closed, r.outputT]), [[1002, true, 0], [1001, false, 2.5]]);
+    assert.equal(rows[1].client, 'ООО Альфа');
+    const withTkp = dealsWithoutTkp(ref, [{ b24: 1001 } as never], new Map([[501, 2500]]), new Set());
+    assert.equal(withTkp.length, 0);
+  });
+
+  it('справочная выручка сторонних = выпуск × цена', () => {
+    const prices = [{ opp: 501, b24: 1001, customer: 'ООО Альфа', pricePerT: 100000 } as never];
+    const rows = externalReference([
+      { opp: 501, order: 'з1', month: '2026-01', workshop: 'Цех А', outputT: 2, metalT: 0, metalRub: 0, totalRub: 0 },
+      { opp: 501, order: 'з1', month: '2026-02', workshop: 'Цех Б', outputT: 1, metalT: 0, metalRub: 0, totalRub: 0 },
+      { opp: 502, order: 'з2', month: '2026-02', workshop: 'Цех А', outputT: 4, metalT: 0, metalRub: 0, totalRub: 0 },
+    ], prices, ref);
+    assert.equal(rows[0].revenue, 300000);
+    assert.deepEqual(rows[0].workshops, ['Цех А', 'Цех Б']);
+    assert.equal(rows[1].revenue, null);
+  });
+
+  it('находит загрузку-источник по типу, Б24 и имени файла', () => {
+    const u = (id: string, kind: never, fileName: string, department = '') => ({ id, kind, fileName, department, period: '', rowCount: 0, uploadedBy: '', uploadedAt: 0 });
+    const ups = [u('tkp_1001', 'tkp' as never, 'Расчет ТКП 1001.xlsm', '1001'), u('dept_1', 'department' as never, 'Проектирование.xlsx'), u('rates', 'rates' as never, 'Расценки.xlsx')];
+    assert.equal(findUpload(ups, { kind: 'tkp', b24: 1001 })?.id, 'tkp_1001');
+    assert.equal(findUpload(ups, { kind: 'department', fileName: 'Проектирование.xlsx' })?.id, 'dept_1');
+    assert.equal(findUpload(ups, { kind: 'rates' })?.id, 'rates');
+    assert.equal(findUpload(ups, { kind: 'tkp', b24: 9 }), undefined);
+  });
+});

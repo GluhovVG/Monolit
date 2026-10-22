@@ -1,5 +1,6 @@
 import { db, error, json, type RouterContext } from '@appdeploy/sdk';
 import { safeKey } from './safe-key';
+import { deleteSourceFile, UPLOAD_ID } from './source-files';
 
 const UPLOADS = 'uploads';
 const UPLOAD_LOG = 'upload_log';
@@ -16,6 +17,8 @@ type UploadBody = {
   period?: unknown;
   payload?: unknown;
   rowCount?: unknown;
+  /** Ссылка на Google Таблицу, если данные загружены по ссылке. */
+  sourceUrl?: unknown;
 };
 
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -45,8 +48,13 @@ export async function saveUpload(ctx: RouterContext) {
     return error('Файл слишком большой для хранения одним набором. Разделите выгрузку по периодам.', 413);
   }
   const id = uploadId(kind, department, period);
+  const sourceUrl = str(body.sourceUrl, 600);
+  if (sourceUrl && !/^https:\/\/(docs|drive)\.google\.com\//.test(sourceUrl)) return error('Неверная ссылка на источник.', 400);
+  // The previous copy of the source file belongs to the replaced version.
+  const [prev] = await db.get<{ filePath?: string }>(UPLOADS, [id]);
+  if (prev?.filePath) await deleteSourceFile(prev.filePath);
   const record = {
-    kind, fileName, department, period,
+    kind, fileName, department, period, sourceUrl,
     rowCount: typeof body.rowCount === 'number' ? body.rowCount : null,
     uploadedBy: ctx.user?.email ?? '', uploadedAt: Date.now(),
     payload: serialized,
@@ -71,6 +79,7 @@ export async function listUploads() {
     uploads: items.map(item => ({
       id: item.id, kind: item.kind, fileName: item.fileName, department: item.department, period: item.period,
       rowCount: item.rowCount, uploadedBy: item.uploadedBy, uploadedAt: item.uploadedAt,
+      sourceUrl: item.sourceUrl ?? '', hasFile: Boolean(item.filePath),
       payload: typeof item.payload === 'string' ? JSON.parse(item.payload) : null,
     })),
   });
@@ -78,7 +87,9 @@ export async function listUploads() {
 
 export async function deleteUpload(ctx: RouterContext) {
   const id = str(ctx.params.id, 40);
-  if (!/^(reference|rates|prod_own|prod_ext|weights|dept_[0-9a-f]{8}|tkp_\d{3,7})$/.test(id)) return error('Неверный идентификатор.', 400);
+  if (!UPLOAD_ID.test(id)) return error('Неверный идентификатор.', 400);
+  const [prev] = await db.get<{ filePath?: string }>(UPLOADS, [id]);
+  if (prev?.filePath) await deleteSourceFile(prev.filePath);
   const [ok] = await db.delete(UPLOADS, [id]);
   return json({ deleted: Boolean(ok) });
 }

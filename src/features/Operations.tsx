@@ -7,7 +7,7 @@ import {
 } from '../domain/consolidate';
 import type { MkLine } from '../domain/mk-production';
 import { outputKgByOpp, revenuePrices, type PriceRow } from '../domain/revenue-prices';
-import { outputFinres, outputTotals, type OutputRow } from '../domain/output-finres';
+import { externalReference, outputFinres, outputTotals, type OutputRow } from '../domain/output-finres';
 import {
   blockTotals, departmentFromFileName, detectDepartmentMapping, extractDepartmentDeals, sanitizeMapping, sheetPreview,
   type AiMappingProposal, type DepartmentDeal, type DepartmentMapping,
@@ -23,9 +23,11 @@ import { readWorkbook, readWorkbookBuffer } from '../import/xlsx-reader';
 import { downloadCsv, downloadXlsx, type Matrix } from './table-export';
 import { closeChecklist } from '../domain/close-checklist';
 import { customerKey, summarize, type SummaryLine } from '../domain/summary';
+import { SourceProvider, useSource, type SourceRef } from './source-link';
+import { dealsWithoutTkp } from '../domain/no-tkp';
 import { buildAiContext, loadWorkspace, packProduction, packReference, type Alias, type SheetSource, type UploadMeta } from './workspace';
 
-export type OperationsPage = 'uploads' | 'register' | 'prices' | 'output' | 'production' | 'assistant';
+export type OperationsPage = 'uploads' | 'register' | 'prices' | 'output' | 'notkp' | 'production' | 'assistant';
 
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 const money = (n: number | null | undefined) => (n === null || n === undefined ? '—' : rub.format(n));
@@ -62,12 +64,18 @@ export function Operations({ page }: { page: OperationsPage }) {
       <button className="btn-primary" onClick={() => void reload()}>Повторить</button></div>;
   }
   if (!state || !consolidation) return <p role="status">Загружаем данные…</p>;
+  return <SourceProvider uploads={state.uploads}>{renderPage()}</SourceProvider>;
+
+  function renderPage() {
+  if (!state || !consolidation) return null;
   if (page === 'uploads') return <UploadsPage uploads={state.uploads} aliases={state.aliases} sources={state.sources} onChanged={reload} />;
   if (page === 'prices') return <PricesPage data={state.data} weights={state.weights} />;
   if (page === 'output') return <OutputPage data={state.data} weights={state.weights} />;
+  if (page === 'notkp') return <NoTkpPage data={state.data} c={consolidation} />;
   if (page === 'register') return <RegisterPage c={consolidation} data={state.data} onChanged={reload} />;
   if (page === 'production') return <ProductionPage c={consolidation} data={state.data} onChanged={reload} />;
   return <AssistantPage c={consolidation} />;
+  }
 }
 
 function Heading({ eyebrow, title, text, actions }: { eyebrow: string; title: string; text: string; actions?: ReactNode }) {
@@ -102,8 +110,17 @@ type Pending = {
   aiNote?: string;
   preview?: DepartmentDeal[];
   tkp?: TkpFile;
+  /** Исходный файл: после сохранения данных его копия кладётся в хранилище (для открытия из цифр). */
+  file?: File;
   error?: string;
 };
+
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
 
 function prepare(book: Workbook, kind: FileKind, base: Pending): Pending {
   if (kind === 'reference') {
@@ -207,7 +224,7 @@ function UploadsPage({ uploads, aliases, sources, onChanged }: { uploads: Upload
       try {
         const book = await readWorkbook(file);
         const kind = detectFileKind(book);
-        let next = prepare(book, kind, { ...base, book, kind });
+        let next = prepare(book, kind, { ...base, book, kind, file });
         // ТКП workbooks are large; only the parsed positions are kept.
         if (kind === 'tkp') next = { ...next, book: undefined };
         update(base.id, next);
@@ -225,8 +242,20 @@ function UploadsPage({ uploads, aliases, sources, onChanged }: { uploads: Upload
     if (p.status !== 'ready' || !p.payload) return;
     update(p.id, { status: 'saving' });
     try {
-      await api.post('/api/uploads', { kind: p.kind, fileName: p.fileName, department: p.department, period: p.period, payload: p.payload, rowCount: p.rowCount });
-      update(p.id, { status: 'saved', book: undefined });
+      const res = await api.post('/api/uploads', { kind: p.kind, fileName: p.fileName, department: p.department, period: p.period, payload: p.payload, rowCount: p.rowCount });
+      const id = String((res.data as { id?: string }).id ?? '');
+      let note = '';
+      if (id && p.file) {
+        if (p.file.size > 4 * 1024 * 1024) note = 'Копия файла не сохранена: файл больше 4 МБ.';
+        else {
+          try {
+            await api.post('/api/uploads/' + encodeURIComponent(id) + '/file', { fileName: p.fileName, base64: await fileToBase64(p.file) });
+          } catch (cause) {
+            note = 'Данные сохранены, копия файла — нет: ' + errorText(cause, 'ошибка хранилища.');
+          }
+        }
+      }
+      update(p.id, { status: 'saved', book: undefined, file: undefined, issues: note ? [...p.issues, note] : p.issues });
     } catch (cause) {
       update(p.id, { status: 'error', error: errorText(cause, 'Не удалось сохранить.') });
     }
@@ -253,7 +282,7 @@ function UploadsPage({ uploads, aliases, sources, onChanged }: { uploads: Upload
     await onChanged();
   };
   const ready = pending.filter(p => p.status === 'ready').length;
-  const uploadLabel = (u: UploadMeta) => (u.kind === 'department' ? `${u.department}, ${monthLabel(u.period)}` : u.kind === 'tkp' ? `сделка ${u.department}` : u.kind === 'weights' && u.department ? 'Google Таблица' : '—');
+  const uploadLabel = (u: UploadMeta) => (u.kind === 'department' ? `${u.department}, ${monthLabel(u.period)}` : u.kind === 'tkp' ? `сделка ${u.department}` : u.sourceUrl ? 'Google Таблица' : '—');
 
   return (
     <>
@@ -480,6 +509,7 @@ function MkSummary({ mk }: { mk: OppMk }) {
 }
 
 function RowDetails({ r }: { r: OppRow }) {
+  const src = useSource();
   const blockLines = BLOCKS.flatMap(b => r.blocks[b.key].lines.map(l => ({ ...l, label: b.label })))
     .concat(r.omts.lines.map(l => ({ ...l, label: 'ОМТС (справочно)' })));
   return (
@@ -491,7 +521,7 @@ function RowDetails({ r }: { r: OppRow }) {
         <div className="table-wrap"><table>
           <thead><tr><th>Позиция ТКП</th><th>Вес план, кг</th><th>Себестоимость МК план</th><th>Стоимость МК план</th><th>Стоимость МК факт</th></tr></thead>
           <tbody>{r.tkp.map(p => (
-            <tr key={p.sourceRow}><td>{p.name}</td><td>{kg(p.weightPlanKg)}</td><td>{money(p.mkCostPlan)}</td><td>{money(p.mkValuePlan)}</td><td>{money(p.mkValueFact)}</td></tr>
+            <tr key={p.sourceRow} {...src(tkpSrc(r.b24))}><td>{p.name}</td><td>{kg(p.weightPlanKg)}</td><td>{money(p.mkCostPlan)}</td><td>{money(p.mkValuePlan)}</td><td>{money(p.mkValueFact)}</td></tr>
           ))}</tbody>
         </table></div>
       ) : <p>Нет позиций ТКП для этого шифра.</p>}
@@ -500,7 +530,7 @@ function RowDetails({ r }: { r: OppRow }) {
         <div className="table-wrap"><table>
           <thead><tr><th>Блок</th><th>Строка файла</th><th>Бак</th><th>Наименование</th><th>Поставщик</th><th>Выручка (бюджет)</th><th>Себестоимость (факт)</th><th>Доля</th><th>Источник</th></tr></thead>
           <tbody>{blockLines.map((l, k) => (
-            <tr key={k}>
+            <tr key={k} {...src({ kind: 'department', fileName: l.fileName })}>
               <td>{l.label}</td><td>{l.block}</td><td><small>{l.tank || '—'}</small></td><td>{l.name || '—'}{l.note && <small>{l.note}</small>}</td><td>{l.supplier || '—'}</td>
               <td>{money(l.budgetRub === null ? null : l.budgetRub * l.share)}</td><td>{money(l.factRub === null ? null : l.factRub * l.share)}</td>
               <td>{l.by === 'tank' ? 'по баку' : pct(l.share)}</td><td><small>{l.fileName}, стр. {l.sourceRow}</small></td>
@@ -580,13 +610,19 @@ function SummaryPanel({ rows }: { rows: OppRow[] }) {
   );
 }
 
-function PF({ plan, fact, inverse }: { plan: number | null; fact: number | null; inverse?: boolean }) {
+function PF({ plan, fact, inverse, planSrc, factSrc }: { plan: number | null; fact: number | null; inverse?: boolean; planSrc?: SourceRef | null; factSrc?: SourceRef | null }) {
+  const src = useSource();
   const d = delta(fact, plan);
   const bad = d !== null && (inverse ? d > 0 : d < 0);
-  return <><td>{money(plan)}</td><td>{money(fact)}</td><td className={bad ? 'negative' : undefined}>{money(d)}</td></>;
+  return <><td {...src(planSrc)}>{money(plan)}</td><td {...src(factSrc)}>{money(fact)}</td><td className={bad ? 'negative' : undefined}>{money(d)}</td></>;
 }
 
+/** Ссылки на файлы-источники цифр строки реестра. */
+const tkpSrc = (b24: number | null): SourceRef | null => (b24 !== null ? { kind: 'tkp', b24 } : null);
+const deptSrc = (lines: ReadonlyArray<{ fileName: string }>): SourceRef | null => (lines[0] ? { kind: 'department', fileName: lines[0].fileName } : null);
+
 function RegisterPage({ c, data, onChanged }: { c: Consolidation; data: WorkspaceData; onChanged: () => Promise<void> }) {
+  const src = useSource();
   const [period, setPeriod] = useState('all');
   const [search, setSearch] = useState('');
   const [onlyIssues, setOnlyIssues] = useState(false);
@@ -674,15 +710,17 @@ function RegisterPage({ c, data, onChanged }: { c: Consolidation; data: Workspac
                   <td>{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</td>
                   <td>{monthLabel(r.period)}</td><td><strong>{r.opp ?? '—'}</strong></td><td>{r.customer}</td>
                   <td className="tanks-cell"><small>{r.tanks.join('; ') || r.product}</small></td><td>{r.b24 ?? '—'}</td>
-                  <PF plan={r.revenuePlan} fact={r.revenueFact} /><PF plan={r.costPlan} fact={r.costFact} inverse /><PF plan={r.profitPlan} fact={r.profitFact} />
+                  <PF plan={r.revenuePlan} fact={r.revenueFact} planSrc={tkpSrc(r.b24)} factSrc={tkpSrc(r.b24)} />
+                  <PF plan={r.costPlan} fact={r.costFact} inverse planSrc={tkpSrc(r.b24)} factSrc={{ kind: 'prod_own' }} />
+                  <PF plan={r.profitPlan} fact={r.profitFact} />
                   <td className={neg(r.profitFact)}>{pct(ratio(r.profitFact, r.revenueFact))}</td>
-                  <td>{kg(r.weightPlanKg)}</td><td>{kg(r.weightFactKg)}</td>
-                  <td>{money(r.mkValuePlan)}</td><td>{money(r.mkValueFact)}</td><td>{num1(r.priceKg)}</td>
-                  <PF plan={r.mkCostPlan} fact={r.mk?.costRub ?? null} inverse />
-                  <td>{money(r.mk?.own.totalRub)}</td><td>{money(r.mk?.own.writeOffRub)}</td><td>{kg(r.mk?.own.outputKg)}</td>
-                  <td>{money(r.mk?.ext.totalRub)}</td><td>{money(r.mk?.ext.writeOffRub)}</td><td>{money(r.mk ? r.mk.ext.workRub + r.mk.ext.reallocationRub : null)}</td>
+                  <td {...src(tkpSrc(r.b24))}>{kg(r.weightPlanKg)}</td><td {...src({ kind: 'prod_own' })}>{kg(r.weightFactKg)}</td>
+                  <td {...src(tkpSrc(r.b24))}>{money(r.mkValuePlan)}</td><td {...src(tkpSrc(r.b24))}>{money(r.mkValueFact)}</td><td>{num1(r.priceKg)}</td>
+                  <PF plan={r.mkCostPlan} fact={r.mk?.costRub ?? null} inverse planSrc={tkpSrc(r.b24)} factSrc={{ kind: 'prod_own' }} />
+                  <td {...src({ kind: 'prod_own' })}>{money(r.mk?.own.totalRub)}</td><td {...src({ kind: 'prod_own' })}>{money(r.mk?.own.writeOffRub)}</td><td {...src({ kind: 'prod_own' })}>{kg(r.mk?.own.outputKg)}</td>
+                  <td {...src({ kind: 'prod_ext' })}>{money(r.mk?.ext.totalRub)}</td><td {...src({ kind: 'prod_ext' })}>{money(r.mk?.ext.writeOffRub)}</td><td {...src(r.mk?.reallocations.length ? { kind: 'department', fileName: r.mk.reallocations[0].fileName } : { kind: 'prod_ext' })}>{money(r.mk ? r.mk.ext.workRub + r.mk.ext.reallocationRub : null)}</td>
                   <td className={neg(r.mkProfitFact)}>{money(r.mkProfitFact)}</td>
-                  {BLOCKS.map(b => <Fragment key={b.key}><td>{money(r.blocks[b.key].plan)}</td><td>{money(r.blocks[b.key].fact)}</td></Fragment>)}
+                  {BLOCKS.map(b => <Fragment key={b.key}><td {...src(deptSrc(r.blocks[b.key].lines))}>{money(r.blocks[b.key].plan)}</td><td {...src(deptSrc(r.blocks[b.key].lines))}>{money(r.blocks[b.key].fact)}</td></Fragment>)}
                   <td>{money(r.finesRub)}</td>
                   <td>{level ? <span className={'status ' + level}>{r.issues.filter(i => i.level !== 'info').length}</span> : '—'}</td>
                 </tr>
@@ -704,6 +742,7 @@ function RegisterPage({ c, data, onChanged }: { c: Consolidation; data: Workspac
 /* ───────────────────────── Production ───────────────────────── */
 
 function ProductionPage({ c, data, onChanged }: { c: Consolidation; data: WorkspaceData; onChanged: () => Promise<void> }) {
+  const src = useSource();
   const [open, setOpen] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [scope, setScope] = useState<'finished' | 'all'>('finished');
@@ -753,7 +792,7 @@ function ProductionPage({ c, data, onChanged }: { c: Consolidation; data: Worksp
               <td>{open === p.opp ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</td>
               <td><strong>{p.opp}</strong>{!p.finished && <small>незавершённое</small>}</td>
               <td>{p.b24 ?? '—'}<small>{p.customer}</small></td>
-              <td>{kg(p.mk.own.outputKg)}</td><td>{money(p.mk.own.totalRub)}</td><td>{kg(p.mk.ext.outputKg)}</td><td>{money(p.mk.ext.totalRub)}</td>
+              <td {...src({ kind: 'prod_own' })}>{kg(p.mk.own.outputKg)}</td><td {...src({ kind: 'prod_own' })}>{money(p.mk.own.totalRub)}</td><td {...src({ kind: 'prod_ext' })}>{kg(p.mk.ext.outputKg)}</td><td {...src({ kind: 'prod_ext' })}>{money(p.mk.ext.totalRub)}</td>
               <td>{money(p.mk.costRub)}</td><td>{num1(ratio(p.mk.costRub, p.mk.outputKg))}</td>
             </tr>
             {open === p.opp && <tr className="details-row"><td colSpan={9}>
@@ -891,7 +930,7 @@ function GoogleSheetsPanel({ sources, onChanged }: { sources: SheetSource[]; onC
       const book = await readWorkbookBuffer(base64ToBuffer(base64), fileName);
       const p = prepare(book, kind, { id: kind, fileName, status: 'reading', kind, summary: '', issues: [], department: '', period: '' });
       if (p.status !== 'ready' || !p.payload) throw new Error(p.error ?? 'Таблица не распознана как «' + SHEET_KINDS.find(k => k.kind === kind)!.label + '».');
-      await api.post('/api/uploads', { kind, fileName: 'Google: ' + fileName, department: kind === 'weights' ? 'google' : '', period: '', payload: p.payload, rowCount: p.rowCount });
+      await api.post('/api/uploads', { kind, fileName: 'Google: ' + fileName, department: '', period: '', payload: p.payload, rowCount: p.rowCount, sourceUrl: url });
       setStatus(s => ({ ...s, [kind]: 'Загружено: ' + p.summary }));
       await onChanged();
     } catch (cause) {
@@ -938,6 +977,7 @@ function pricesMatrix(rows: PriceRow[]): Matrix {
 }
 
 function PricesPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
+  const src = useSource();
   const [search, setSearch] = useState('');
   const all = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])])), [data, weights]);
   const rows = all.filter(r => `${r.opp ?? ''} ${r.b24 ?? ''} ${r.customer} ${r.tanks.join(' ')}`.toLowerCase().includes(search.toLowerCase()));
@@ -967,9 +1007,9 @@ function PricesPage({ data, weights }: { data: WorkspaceData; weights: WeightsFi
             <tr key={r.key}>
               <td><strong>{r.opp ?? '—'}</strong></td><td>{r.customer || '—'}</td>
               <td className="tanks-cell"><small>{r.tanks.join('; ')}</small>{r.issue && <small className="login-error">{r.issue}</small>}</td>
-              <td>{r.b24 ?? '—'}</td><td>{money(r.mkValue)}</td>
-              <td>{tonne(r.weightKg)}<small>{weightSourceLabel(r)}{r.weightSource === 'output' && r.planWeightKg !== null ? ` · план ${tonne(r.planWeightKg)} т` : ''}</small></td>
-              <td><strong>{money(r.pricePerT)}</strong></td>
+              <td>{r.b24 ?? '—'}</td><td {...src(tkpSrc(r.b24))}>{money(r.mkValue)}</td>
+              <td {...src(r.weightSource === 'weights' ? { kind: 'weights' } : r.weightSource === 'output' ? { kind: 'prod_own' } : tkpSrc(r.b24))}>{tonne(r.weightKg)}<small>{weightSourceLabel(r)}{r.weightSource === 'output' && r.planWeightKg !== null ? ` · план ${tonne(r.planWeightKg)} т` : ''}</small></td>
+              <td {...src(tkpSrc(r.b24))}><strong>{money(r.pricePerT)}</strong></td>
             </tr>
           ))}
         </tbody>
@@ -1006,6 +1046,7 @@ function OutputTotalsRow({ label, rows }: { label: string; rows: OutputRow[] }) 
 
 /** Финрез по выпуску завода по месяцам: цены из «Расчёта цен для выручки» × вес выпуска по шифрам. */
 function OutputPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
+  const src = useSource();
   const prices = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])])), [data, weights]);
   const all = useMemo(() => outputFinres(data.prodOwn ?? [], prices, data.rates, data.reference ?? []), [data, prices]);
   const months = useMemo(() => Array.from(new Set(all.map(r => r.month).filter((m): m is string => m !== null))).sort(), [all]);
@@ -1057,8 +1098,8 @@ function OutputPage({ data, weights }: { data: WorkspaceData; weights: WeightsFi
                 <tr key={r.key}>
                   <td>{monthLabel(r.month)}</td><td><strong>{r.opp ?? '—'}</strong></td><td>{r.customer || '—'}</td>
                   <td className="tanks-cell"><small>{r.tanks.join('; ')}</small>{r.issue && <small className="login-error">{r.issue}</small>}</td>
-                  <td>{t3(r.outputT)}</td><td>{money(r.pricePerT)}</td><td>{money(r.revenue)}</td>
-                  <td>{t3(r.metalT)}</td><td>{money(r.writeOffRub)}</td><td>{r.coef === null ? '—' : num1(r.coef)}</td><td>{money(r.processingRub)}</td>
+                  <td {...src({ kind: 'prod_own' })}>{t3(r.outputT)}</td><td {...src(tkpSrc(r.b24))}>{money(r.pricePerT)}</td><td {...src(tkpSrc(r.b24))}>{money(r.revenue)}</td>
+                  <td {...src({ kind: 'prod_own' })}>{t3(r.metalT)}</td><td {...src({ kind: 'prod_own' })}>{money(r.writeOffRub)}</td><td {...src({ kind: 'rates' })}>{r.coef === null ? '—' : num1(r.coef)}</td><td {...src({ kind: 'rates' })}>{money(r.processingRub)}</td>
                   <td className={neg(r.result)}>{money(r.result)}</td><td className={neg(r.result)}>{pct(r.margin)}</td>
                 </tr>
               ))}
@@ -1067,6 +1108,90 @@ function OutputPage({ data, weights }: { data: WorkspaceData; weights: WeightsFi
         </tbody>
       </table></div>
       <p className="register-note"><small>Считается выпуск собственного завода (отчёт «Выпуск СЗ по месяцам»). Выпуск сторонних цехов в отчёте без месяца, поэтому сюда не входит. Строки без цены или коэффициента не попадают в финрез и рентабельность итога.</small></p>
+      <ExternalReference data={data} prices={prices} />
+    </>
+  );
+}
+
+/** Справочно: выпуск сторонних цехов × цена за тонну. В финрез не входит — для финреза будет отдельный источник выпуска. */
+function ExternalReference({ data, prices }: { data: WorkspaceData; prices: PriceRow[] }) {
+  const src = useSource();
+  const rows = useMemo(() => externalReference(data.prodExt ?? [], prices, data.reference ?? []), [data, prices]);
+  if (!rows.length) return null;
+  const totalT = rows.reduce((s, r) => s + r.outputT, 0);
+  const priced = rows.filter(r => r.revenue !== null);
+  const totalRev = priced.reduce((s, r) => s + (r.revenue as number), 0);
+  const matrix: Matrix = {
+    head: ['ОПП', 'Б24', 'Заказчик', 'Цеха', 'Выпуск, т', 'Цена, ₽/т', 'Выручка справочно, ₽'],
+    rows: rows.map(r => [r.opp, r.b24, r.customer, r.workshops.join(', '), r.outputT, r.pricePerT, r.revenue]),
+  };
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div><h2>Справочно: выпуск сторонних цехов</h2><p>Не входит в итоги финреза.</p></div>
+        <div>
+          <button className="btn-secondary" onClick={() => void downloadXlsx(matrix, 'Сторонние справочно', 'MONOLITH-Vypusk-storonnie.xlsx')}><Download size={16} /> Excel</button>
+        </div>
+      </div>
+      <p className="register-note"><small>Выручка = выпуск сторонних цехов (все месяцы) × цена за тонну. В итоги финреза не входит. Для финреза по сторонним будет отдельный источник выпуска (файл или Google-таблица).</small></p>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>ОПП</th><th>Б24</th><th>Заказчик</th><th>Цеха</th><th>Выпуск, т</th><th>Цена, ₽/т</th><th>Выручка, ₽</th></tr></thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={String(r.opp) + r.customer}>
+                <td>{r.opp ?? '—'}</td><td>{r.b24 ?? '—'}</td><td>{r.customer || '—'}</td><td>{r.workshops.join(', ') || '—'}</td>
+                <td {...src({ kind: 'prod_ext' })}>{t3(r.outputT)}</td>
+                <td {...src(tkpSrc(r.b24))}>{money(r.pricePerT)}</td>
+                <td {...src(tkpSrc(r.b24))}>{money(r.revenue)}</td>
+              </tr>
+            ))}
+            <tr className="total-row"><td colSpan={4}>Итого{priced.length < rows.length ? ` (без цены: ${rows.length - priced.length})` : ''}</td><td>{t3(totalT)}</td><td /><td>{money(totalRev)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function NoTkpPage({ data, c }: { data: WorkspaceData; c: Consolidation }) {
+  const src = useSource();
+  const closed = useMemo(() => new Set(c.deals.map(d => d.b24).filter((b): b is number => b !== null)), [c]);
+  const rows = useMemo(() => dealsWithoutTkp(data.reference ?? [], data.tkp,
+    outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])]), closed), [data, closed]);
+  const name = (r: { client: string; product: string }) => [r.client, r.product].filter(Boolean).join(' — ');
+  const matrix: Matrix = {
+    head: ['Б24', 'Наименование сделки', 'РВС', 'ОПП', 'Выпуск, т', 'Закрыта в подразделениях', 'Лист справочника'],
+    rows: rows.map(r => [r.b24, name(r), r.tanks.join(', '), r.opps.join(', '), r.outputT, r.closed ? 'да' : 'нет', r.sheets.join(', ')]),
+  };
+  return (
+    <>
+      <Heading eyebrow="КОНТРОЛЬ ИСТОЧНИКОВ" title="Сделки без ТКП"
+        text="Сделки из «Номеров заказов», по которым есть выпуск МК или которые закрыты в файлах подразделений, но не загружен «Расчёт ТКП». Без ТКП нет цены за тонну, плана МК и выручки по выпуску."
+        actions={<>
+          <button className="btn-secondary" disabled={!rows.length} onClick={() => void downloadXlsx(matrix, 'Сделки без ТКП', 'MONOLITH-Sdelki-bez-TKP.xlsx')}><Download size={16} /> Excel</button>
+          <button className="btn-secondary" disabled={!rows.length} onClick={() => downloadCsv(matrix, 'MONOLITH-Sdelki-bez-TKP.csv')}><Download size={16} /> CSV</button>
+        </>} />
+      {!data.reference?.length && <div className="bottom-note">Загрузите «Номера заказов».</div>}
+      <div className="kpi-grid">
+        <div className="kpi-card"><span>Сделок без ТКП</span><strong className="kpi-value">{rows.length}</strong></div>
+        <div className="kpi-card"><span>Из них закрыты</span><strong className="kpi-value">{rows.filter(r => r.closed).length}</strong></div>
+        <div className="kpi-card"><span>Выпуск по ним</span><strong className="kpi-value">{t3(rows.reduce((s, r) => s + r.outputT, 0))} т</strong></div>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Б24</th><th>Наименование сделки</th><th>РВС</th><th>ОПП</th><th>Выпуск, т</th><th>Закрыта</th><th>Лист</th></tr></thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.b24} {...src({ kind: 'reference' })}>
+                <td>{r.b24}</td><td>{name(r) || '—'}</td><td>{r.tanks.join(', ') || '—'}</td><td>{r.opps.join(', ') || '—'}</td>
+                <td>{t3(r.outputT)}</td><td>{r.closed ? 'да' : '—'}</td><td>{r.sheets.join(', ')}</td>
+              </tr>
+            ))}
+            {!rows.length && <tr><td colSpan={7}>Нет сделок без ТКП.</td></tr>}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }

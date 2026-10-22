@@ -16,19 +16,23 @@ export type UploadMeta = {
   rowCount: number | null;
   uploadedBy: string;
   uploadedAt: number;
+  /** Ссылка Google, если данные загружены по ссылке. */
+  sourceUrl?: string;
+  /** Есть копия исходного файла в хранилище. */
+  hasFile?: boolean;
 };
 export type Alias = { id: string; kind: 'contractor' | 'deal'; from: string; to: string | number; confirmedBy: string };
 
 // Stored payloads are compact tuples to stay within database item limits.
-// Reference tuple: b24, client, tank code, ОПП, sheet, factory number (6th item added later, may be absent).
-type RefTuple = [number | null, string, string, number | null, string, string?];
+// Reference tuple: b24, client, tank code, ОПП, sheet, factory number, product (items 6–7 added later, may be absent).
+type RefTuple = [number | null, string, string, number | null, string, string?, string?];
 type ProdTuple = [number | null, string, string | null, string, number, number, number, number];
 
-export const packReference = (rows: ReferenceRow[]) => rows.map(r => [r.b24, r.client, r.tankCode, r.opp, r.sheet, r.factoryNo] as RefTuple);
+export const packReference = (rows: ReferenceRow[]) => rows.map(r => [r.b24, r.client, r.tankCode, r.opp, r.sheet, r.factoryNo, r.product ?? ''] as RefTuple);
 export const packProduction = (rows: ProductionRow[]) =>
   rows.map(r => [r.opp, r.order, r.month, r.workshop, r.outputT, r.metalT, r.metalRub, r.totalRub] as ProdTuple);
 const unpackReference = (rows: RefTuple[]): ReferenceRow[] =>
-  rows.map(([b24, client, tankCode, opp, sheet, factoryNo]) => ({ b24, client, tankCode, opp, sheet, factoryNo: factoryNo ?? '' }));
+  rows.map(([b24, client, tankCode, opp, sheet, factoryNo, product]) => ({ b24, client, product: product ?? '', tankCode, opp, sheet, factoryNo: factoryNo ?? '' }));
 const unpackProduction = (rows: ProdTuple[]): ProductionRow[] =>
   rows.map(([opp, order, month, workshop, outputT, metalT, metalRub, totalRub]) => ({ opp, order, month, workshop, outputT, metalT, metalRub, totalRub }));
 
