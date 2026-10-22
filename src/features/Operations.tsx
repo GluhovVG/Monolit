@@ -1008,7 +1008,7 @@ function OutputPage({ data, weights }: { data: WorkspaceData; weights: WeightsFi
   const all = useMemo(() => outputFinres(data.prodOwn ?? [], prices, data.rates, data.reference ?? []), [data, prices]);
   const months = useMemo(() => Array.from(new Set(all.map(r => r.month).filter((m): m is string => m !== null))).sort(), [all]);
   const [month, setMonth] = useState<string>('');
-  const [onlyPriced, setOnlyPriced] = useState(false);
+  const [onlyPriced, setOnlyPriced] = useState(true);
   const [search, setSearch] = useState('');
   const current = month || months[months.length - 1] || 'all';
   const rows = all.filter(r => (current === 'all' || r.month === current) && (!onlyPriced || r.pricePerT !== null)
