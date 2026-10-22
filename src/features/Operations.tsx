@@ -19,6 +19,9 @@ import { normalizeName, type Workbook } from '../import/sheet';
 import { parseTkp, type TkpFile } from '../import/tkp';
 import { parseWeights, type WeightsFile } from '../import/weights';
 import { readWorkbook, readWorkbookBuffer } from '../import/xlsx-reader';
+import { downloadCsv, downloadXlsx, type Matrix } from './table-export';
+import { closeChecklist } from '../domain/close-checklist';
+import { customerKey, summarize, type SummaryLine } from '../domain/summary';
 import { buildAiContext, loadWorkspace, packProduction, packReference, type Alias, type SheetSource, type UploadMeta } from './workspace';
 
 export type OperationsPage = 'uploads' | 'register' | 'prices' | 'production' | 'assistant';
@@ -514,34 +517,65 @@ function RowDetails({ r }: { r: OppRow }) {
   );
 }
 
-const csvCell = (v: unknown) => {
-  const s = v === null || v === undefined ? '' : typeof v === 'number' ? String(Math.round(v * 100) / 100).replace('.', ',') : String(v);
-  return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
-
-function exportRegister(rows: OppRow[]) {
+/** Таблица реестра для выгрузки: те же колонки и числа, что на экране. */
+function registerMatrix(rows: OppRow[]): Matrix {
   const head = ['Месяц', 'Шифр ОПП', 'Заказчик', 'Изделие (баки)', 'Б24', 'Выручка план', 'Выручка факт', 'Полная с-ть план', 'Полная с-ть факт',
     'Маржа план', 'Маржа факт', 'Вес план, кг', 'Вес факт, кг', 'Стоимость МК план', 'Стоимость МК факт', 'Цена за 1 кг', 'Себестоимость МК план',
     'Себестоимость МК факт', 'Затраты завода', 'Металл (завод)', 'Без сырья (завод)', 'Выпуск завода, кг', 'Затраты сторонние', 'Металл (сторонние)',
     'Работа сторонних по расценке', 'Частичное переразмещение (услуги)', 'Выпуск сторонних, кг', 'Маржа МК план', 'Маржа МК факт',
     ...BLOCKS.flatMap(b => [`${b.label} выручка (бюджет)`, `${b.label} себестоимость (факт)`]), 'БГ/штрафы', 'Замечания'];
-  const lines = rows.map(r => [
+  return { head, rows: rows.map(r => [
     r.period, r.opp, r.customer, r.tanks.join('; '), r.b24, r.revenuePlan, r.revenueFact, r.costPlan, r.costFact, r.profitPlan, r.profitFact,
     r.weightPlanKg, r.weightFactKg, r.mkValuePlan, r.mkValueFact, r.priceKg, r.mkCostPlan, r.mk?.costRub ?? null,
     r.mk?.own.totalRub ?? null, r.mk?.own.writeOffRub ?? null, r.mk?.own.workRub ?? null, r.mk?.own.outputKg ?? null,
     r.mk?.ext.totalRub ?? null, r.mk?.ext.writeOffRub ?? null, r.mk?.ext.workRub ?? null, r.mk?.ext.reallocationRub ?? null, r.mk?.ext.outputKg ?? null,
     r.mkProfitPlan, r.mkProfitFact, ...BLOCKS.flatMap(b => [r.blocks[b.key].plan, r.blocks[b.key].fact]), r.finesRub,
     r.issues.map(i => i.message).join(' | '),
-  ].map(csvCell).join(';'));
-  const csv = '\ufeff' + [head.map(csvCell).join(';'), ...lines].join('\r\n');
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'MONOLITH-Sdelki-po-OPP.csv';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  ]), widths: [10, 9, 28, 40, 8] };
+}
+
+/** Чек-лист закрытия месяца: выбранный месяц или последний загруженный. */
+function ClosePanel({ c, data, period }: { c: Consolidation; data: WorkspaceData; period: string | null }) {
+  if (!period) return null;
+  const items = closeChecklist(data, c, period);
+  const problems = items.filter(i => i.state !== 'ok').length;
+  return (
+    <details className="panel" open={problems > 0}>
+      <summary><b>Закрытие месяца: {monthLabel(period)}</b> — {problems ? `требует внимания: ${problems}` : 'всё загружено'}</summary>
+      <div className="checklist">{items.map(i => (
+        <div key={i.label} className={i.state === 'missing' ? 'login-error' : ''}>
+          {i.state === 'ok' ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />} <b>{i.label}</b> — {i.detail}
+        </div>
+      ))}</div>
+    </details>
+  );
+}
+
+function SummaryTable({ title, lines }: { title: string; lines: SummaryLine[] }) {
+  return (
+    <div className="table-wrap"><table className="register-table">
+      <thead><tr><th>{title}</th><th>Шифров</th><th>Выручка факт</th><th>Себестоимость факт</th><th>Маржа факт</th><th>Рент.</th><th>Вес факт, кг</th></tr></thead>
+      <tbody>{lines.map(l => (
+        <tr key={l.key}><td>{l.key}</td><td>{l.rows}</td><td>{money(l.revenueFact)}</td><td>{money(l.costFact)}</td>
+          <td className={neg(l.profitFact)}>{money(l.profitFact)}</td><td className={neg(l.profitFact)}>{pct(l.margin)}</td><td>{kg(l.weightFactKg)}</td></tr>
+      ))}</tbody>
+    </table></div>
+  );
+}
+
+/** Свод по месяцам и заказчикам (по строкам, которые сейчас видны в реестре). */
+function SummaryPanel({ rows }: { rows: OppRow[] }) {
+  const byMonth = useMemo(() => summarize(rows, r => r.period ?? '').sort((a, b) => a.key.localeCompare(b.key))
+    .map(l => ({ ...l, key: l.key ? monthLabel(l.key) : 'Без месяца' })), [rows]);
+  const byCustomer = useMemo(() => summarize(rows, r => customerKey(r.customer)).sort((a, b) => (b.revenueFact ?? 0) - (a.revenueFact ?? 0)), [rows]);
+  if (!rows.length) return null;
+  return (
+    <details className="panel">
+      <summary><b>Сводка по месяцам и заказчикам</b></summary>
+      <SummaryTable title="Месяц" lines={byMonth} />
+      <SummaryTable title="Заказчик" lines={byCustomer} />
+    </details>
+  );
 }
 
 function PF({ plan, fact, inverse }: { plan: number | null; fact: number | null; inverse?: boolean }) {
@@ -575,7 +609,10 @@ function RegisterPage({ c, data, onChanged }: { c: Consolidation; data: Workspac
     <>
       <Heading eyebrow="РЕЕСТР СДЕЛОК" title="Сделки по шифрам ОПП"
         text="Как лист «Сделки»: строка — шифр для бухгалтерии (ОПП), т.е. тип баков сделки. Бюджеты и факт — из файлов подразделений, план МК — из «Расчёта ТКП», себестоимость МК — из выпуска и «Расценок»."
-        actions={<button className="btn-secondary" disabled={!visible.length} onClick={() => exportRegister(visible)}><Download size={16} /> CSV</button>} />
+        actions={<>
+          <button className="btn-secondary" disabled={!visible.length} onClick={() => void downloadXlsx(registerMatrix(visible), 'Сделки по ОПП', 'MONOLITH-Sdelki-po-OPP.xlsx')}><Download size={16} /> Excel</button>
+          <button className="btn-secondary" disabled={!visible.length} onClick={() => downloadCsv(registerMatrix(visible), 'MONOLITH-Sdelki-po-OPP.csv')}><Download size={16} /> CSV</button>
+        </>} />
       {!data.departments.length && <div className="bottom-note">Файлы подразделений ещё не загружены — откройте «Загрузка файлов».</div>}
       {c.missingBlocks.length > 0 && data.departments.length > 0 && (
         <div className="bottom-note">Нет файлов подразделений для блоков: {c.missingBlocks.join(', ')} — эти блоки показаны как «—».</div>
@@ -586,6 +623,8 @@ function RegisterPage({ c, data, onChanged }: { c: Consolidation; data: Workspac
         <div className="kpi-card"><span>Маржа факт</span><strong className={'kpi-value ' + (neg(t.profitFact) ?? '')}>{money(t.profitFact)}</strong><small>рентабельность {pct(ratio(t.profitFact, t.revenueFact))}</small></div>
         <div className="kpi-card"><span>Вес факт</span><strong className="kpi-value">{kg(t.weightFactKg)} кг</strong><small>план {kg(t.weightPlanKg)} кг</small></div>
       </div>
+      <ClosePanel c={c} data={data} period={period === 'all' ? c.periods[c.periods.length - 1] ?? null : period} />
+      <SummaryPanel rows={visible} />
       <div className="filters">
         <div className="search-box"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск: ОПП, Б24, заказчик, шифр бака" aria-label="Поиск" /></div>
         <select value={period} onChange={e => setPeriod(e.target.value)} aria-label="Месяц">
@@ -884,19 +923,14 @@ function GoogleSheetsPanel({ sources, onChanged }: { sources: SheetSource[]; onC
 
 /* ───────────────────────── Prices for revenue ───────────────────────── */
 
-function exportPrices(rows: PriceRow[]) {
-  const head = ['Шифр ОПП', 'Заказчик', 'РВС', 'Б24', 'Стоимость МК, ₽', 'Вес, т', 'Источник веса', 'Цена, ₽/т', 'Замечание'];
-  const lines = rows.map(r => [r.opp, r.customer, r.tanks.join('; '), r.b24, r.mkValue, r.weightKg === null ? null : r.weightKg / 1000,
-    r.weightSource === 'weights' ? 'файл весов' : r.weightSource === 'tkp' ? 'ТКП' : '', r.pricePerT, r.issue].map(csvCell).join(';'));
-  const csv = '\ufeff' + [head.map(csvCell).join(';'), ...lines].join('\r\n');
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'MONOLITH-Ceny-dlya-vyruchki.csv';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+/** Таблица цен для выгрузки. */
+function pricesMatrix(rows: PriceRow[]): Matrix {
+  return {
+    head: ['Шифр ОПП', 'Заказчик', 'РВС', 'Б24', 'Стоимость МК, ₽', 'Вес, т', 'Источник веса', 'Цена, ₽/т', 'Замечание'],
+    rows: rows.map(r => [r.opp, r.customer, r.tanks.join('; '), r.b24, r.mkValue, r.weightKg === null ? null : r.weightKg / 1000,
+      r.weightSource === 'weights' ? 'файл весов' : r.weightSource === 'tkp' ? 'ТКП' : '', r.pricePerT, r.issue]),
+    widths: [10, 30, 45, 8, 16, 10, 12, 14, 50],
+  };
 }
 
 function PricesPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
@@ -910,7 +944,10 @@ function PricesPage({ data, weights }: { data: WorkspaceData; weights: WeightsFi
     <>
       <Heading eyebrow="ВЫРУЧКА МК" title="Расчёт цен для выручки"
         text="Цена за тонну = стоимость МК из «Расчёта ТКП» / вес. Вес берётся из файла весов по шифру ОПП, а если шифра там нет — плановый вес из ТКП. Позиции ТКП сопоставляются с шифрами через «Номера заказов»."
-        actions={<button className="btn-secondary" disabled={!rows.length} onClick={() => exportPrices(rows)}><Download size={16} /> CSV</button>} />
+        actions={<>
+          <button className="btn-secondary" disabled={!rows.length} onClick={() => void downloadXlsx(pricesMatrix(rows), 'Цены для выручки', 'MONOLITH-Ceny-dlya-vyruchki.xlsx')}><Download size={16} /> Excel</button>
+          <button className="btn-secondary" disabled={!rows.length} onClick={() => downloadCsv(pricesMatrix(rows), 'MONOLITH-Ceny-dlya-vyruchki.csv')}><Download size={16} /> CSV</button>
+        </>} />
       {!data.tkp.length && <div className="bottom-note">Загрузите файлы «Расчёт ТКП» — откройте «Загрузка файлов».</div>}
       {!data.reference && <div className="bottom-note">Не загружены «Номера заказов»: позиции ТКП нельзя сопоставить с шифрами ОПП.</div>}
       {!weights && data.tkp.length > 0 && <div className="bottom-note">Файл весов не загружен — для всех шифров используется плановый вес из ТКП.</div>}

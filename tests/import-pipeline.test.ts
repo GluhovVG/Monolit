@@ -295,3 +295,36 @@ describe('prices for revenue (MK value / weight)', () => {
     assert.equal(noFile.find(r => r.opp === 501)!.pricePerT, 600000 / 3);
   });
 });
+
+describe('automatic checks, month close and summaries', () => {
+  it('flags loss, cost overrun and weight deviation; skips missing values', async () => {
+    const { rowChecks } = await import('../src/domain/checks.ts');
+    const base = { opp: 1, revenueFact: 100, costPlan: 80, costFact: 120, profitFact: -20, weightPlanKg: 1000, weightFactKg: 1200 };
+    assert.deepEqual(rowChecks(base).map(i => i.code), ['LOSS', 'COST_OVER_PLAN', 'WEIGHT_DEVIATION']);
+    assert.deepEqual(rowChecks({ ...base, profitFact: 20, costFact: 82, weightFactKg: 1050 }), []);
+    assert.deepEqual(rowChecks({ ...base, costPlan: null, weightPlanKg: null, profitFact: null }), []);
+  });
+  it('marks a price far from the median of all codes', async () => {
+    const { priceOutliers } = await import('../src/domain/checks.ts');
+    const row = (key: string, pricePerT: number) => ({ key, pricePerT } as unknown as import('../src/domain/revenue-prices.ts').PriceRow);
+    const out = priceOutliers([row('a', 100000), row('b', 110000), row('c', 120000), row('d', 1200000)]);
+    assert.deepEqual(Array.from(out.keys()), ['d']);
+  });
+  it('month checklist lists missing department files and summaries add sums first', async () => {
+    const { closeChecklist } = await import('../src/domain/close-checklist.ts');
+    const { summarize } = await import('../src/domain/summary.ts');
+    const data = {
+      reference: parseReference(reference), rates: parseRates(rates),
+      prodOwn: parseProduction(own).rows, prodExt: parseProduction(ext).rows,
+      departments: deptFiles(), tkp: [parseTkp(tkpBook)], dealAliases: {}, contractorAliases: {},
+    };
+    const c = consolidate(data);
+    const items = closeChecklist(data, c, '2026-02');
+    assert.equal(items.find(i => i.label.startsWith('Документация'))!.state, 'missing');
+    assert.equal(items.find(i => i.label.startsWith('Комплектация'))!.state, 'ok');
+    const [line] = summarize(c.rows.filter(r => r.b24 === 1001), () => 'all');
+    const rev = c.rows.filter(r => r.b24 === 1001).reduce((s, r) => s + (r.revenueFact ?? 0), 0);
+    assert.equal(line.revenueFact, rev);
+    assert.equal(line.margin, line.profitFact! / line.revenueFact!);
+  });
+});

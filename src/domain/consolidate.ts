@@ -4,6 +4,7 @@ import type { Rates } from '../import/rates';
 import type { ReferenceRow } from '../import/reference';
 import { normalizeName } from '../import/sheet';
 import { matchPositionOpp, type TkpFile, type TkpPosition } from '../import/tkp';
+import { rowChecks } from './checks';
 import { computeMkLines, type ContractorAliases, type MkIssue, type MkLine } from './mk-production';
 
 /**
@@ -408,7 +409,7 @@ export function consolidate(data: WorkspaceData): Consolidation {
     if (contract !== null && revenueTotal !== null && Math.abs(revenueTotal - contract) > Math.max(1000, contract * 0.005)) {
       issues.push({ level: 'warning', code: 'REVENUE_VS_CONTRACT', message: `Выручка по ТКП и бюджетам (${Math.round(revenueTotal).toLocaleString('ru-RU')}) отличается от суммы договора (${Math.round(contract).toLocaleString('ru-RU')}).` });
     }
-    for (const r of groupRows) r.issues = [...issues, ...r.issues];
+    for (const r of groupRows) r.issues = [...issues, ...r.issues, ...rowChecks(r)];
     rows.push(...groupRows);
     deals.push({
       key: acc.key, b24: acc.b24, customer: acc.customer, product: acc.product, contractRub: contract, finesRub: fines,

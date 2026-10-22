@@ -1,6 +1,7 @@
 import type { ReferenceRow } from '../import/reference';
 import { matchPositionOpp, type TkpFile, type TkpPosition } from '../import/tkp';
 import type { WeightsFile } from '../import/weights';
+import { priceOutliers } from './checks';
 
 /**
  * Расчёт цен для выручки: цена МК за тонну по шифру ОПП.
@@ -63,6 +64,11 @@ export function revenuePrices(tkp: readonly TkpFile[], reference: readonly Refer
     }
     row.pricePerT = row.mkValue !== null && row.weightKg ? row.mkValue / (row.weightKg / 1000) : null;
     if (!row.tanks.length) row.tanks = row.positions.map(p => p.name);
+  }
+  const outliers = priceOutliers(Array.from(rows.values()));
+  for (const row of rows.values()) {
+    const note = outliers.get(row.key);
+    if (note) row.issue = row.issue ? `${row.issue} ${note}` : note;
   }
   return Array.from(rows.values()).sort((a, b) => (a.opp ?? 1e9) - (b.opp ?? 1e9) || (a.b24 ?? 0) - (b.b24 ?? 0));
 }
