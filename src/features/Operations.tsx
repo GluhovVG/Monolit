@@ -6,7 +6,7 @@ import {
   type Consolidation, type DealIssue, type OppMk, type OppRow, type ProductionOpp, type WorkspaceData,
 } from '../domain/consolidate';
 import type { MkLine } from '../domain/mk-production';
-import { outputKgByOpp, revenuePrices, type PriceRow } from '../domain/revenue-prices';
+import { factOutputKgByOpp, revenuePrices, type PriceRow } from '../domain/revenue-prices';
 import { externalReference, outputFinres, outputTotals, type OutputRow } from '../domain/output-finres';
 import {
   blockTotals, departmentFromFileName, detectDepartmentMapping, extractDepartmentDeals, sanitizeMapping, sheetPreview,
@@ -20,7 +20,7 @@ import { normalizeName, type Workbook } from '../import/sheet';
 import { parseTkp, type TkpFile } from '../import/tkp';
 import { parseWeights, type WeightsFile } from '../import/weights';
 import { hasActsSheet, readActs, type ActsFile } from '../import/acts';
-import { outputByWorkshops, workshopTotals, WORKSHOP_GROUP_LABELS, type WorkshopGroup, type WorkshopRow } from '../domain/output-workshops';
+import { outputByWorkshops, outputReconciliation, workshopTotals, WORKSHOP_GROUP_LABELS, type WorkshopGroup, type WorkshopRow } from '../domain/output-workshops';
 import { readWorkbook, readWorkbookBuffer } from '../import/xlsx-reader';
 import { downloadCsv, downloadXlsx, type Matrix } from './table-export';
 import { closeChecklist } from '../domain/close-checklist';
@@ -1009,7 +1009,7 @@ function pricesMatrix(rows: PriceRow[]): Matrix {
 function PricesPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
   const src = useSource();
   const [search, setSearch] = useState('');
-  const all = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])])), [data, weights]);
+  const all = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, factOutputKgByOpp(data)), [data, weights]);
   const rows = all.filter(r => `${r.opp ?? ''} ${r.b24 ?? ''} ${r.customer} ${r.tanks.join(' ')}`.toLowerCase().includes(search.toLowerCase()));
   const value = rows.reduce((s, r) => s + (r.mkValue ?? 0), 0);
   const weightKg = rows.reduce((s, r) => s + (r.weightKg ?? 0), 0);
@@ -1084,16 +1084,16 @@ const tByGroup = (g: WorkshopGroup) => (g === 'own' ? 0 : g === 'ext_our_metal' 
 function workshopMatrix(rows: WorkshopRow[]): Matrix {
   return {
     head: ['Месяц', 'Юр лицо', 'Группа', 'Цех', 'Шифр ОПП', 'Б24', 'Заказчик', 'Выпуск брутто, т', 'Цена, ₽/т', 'Выручка по выпуску, ₽',
-      'Металл, ₽ с НДС', 'Металл — оценка', 'Коэф./расценка, ₽/кг', 'Переработка, ₽', 'Финрез, ₽', 'Рентабельность', 'Замечание'],
+      'Металл, ₽ с НДС', 'Металл распределён по месяцам', 'Коэф./расценка, ₽/кг', 'Переработка, ₽', 'Финрез, ₽', 'Рентабельность', 'Замечание'],
     rows: rows.map(r => [r.month, r.legal, WORKSHOP_GROUP_LABELS[r.group], r.workshop, r.opp, r.b24, r.customer, r.outputT, r.pricePerT, r.revenue,
-      r.metalRub, r.metalEstimated ? 'да' : '', r.rate, r.processingRub, r.result, r.margin, r.issue]),
+      r.metalRub, r.metalAllocated ? 'да' : '', r.rate, r.processingRub, r.result, r.margin, r.issue]),
     widths: [10, 16, 26, 22, 9, 8, 30, 12, 12, 16, 16, 8, 10, 16, 16, 10, 40],
   };
 }
 
 function WorkshopOutputPage({ data, weights, acts }: { data: WorkspaceData; weights: WeightsFile | null; acts: ActsFile }) {
   const src = useSource();
-  const prices = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])])), [data, weights]);
+  const prices = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, factOutputKgByOpp(data)), [data, weights]);
   const all = useMemo(() => outputByWorkshops(acts, data.prodOwn ?? [], data.prodExt ?? [], prices, data.rates, data.reference ?? [], data.contractorAliases),
     [acts, data, prices]);
   const months = acts.periods;
@@ -1120,7 +1120,7 @@ function WorkshopOutputPage({ data, weights, acts }: { data: WorkspaceData; weig
   return (
     <>
       <Heading eyebrow="ФИНРЕЗ ПО ВЫПУСКУ" title="Финрез по выпуску по цехам"
-        text="Выпуск — «Выпуск продукции», лист «Акты»: тоннаж брутто для выручки, кг → т. Выручка = выпуск × цена за тонну из «Расчёта цен для выручки». Завод: металл — «Сумма всего с НДС» из «Выпуска СЗ» (по шифру за месяц, распределена по цехам пропорционально выпуску), переработка = выпуск × коэффициент месяца. Сторонние из нашего металла: переработка = выпуск × расценка подрядчика, металл — оценка по «Выпуску сторонних цехов». Сторонние на своём металле — только выручка: их затраты в «Переразмещениях» Комплектации."
+        text="Выпуск — «Выпуск продукции», лист «Акты»: тоннаж брутто для выручки, кг → т. Выручка = выпуск × цена за тонну из «Расчёта цен для выручки». Завод: металл — «Сумма всего с НДС» из «Выпуска СЗ» (по шифру за месяц, распределена по цехам пропорционально выпуску), переработка = выпуск × коэффициент месяца. Сторонние цеха: металл — «Сумма всего с НДС» из «Выпуска сторонних цехов» по шифру и подрядчику (отчёт без месяцев — сумма распределена по месяцам пропорционально выпуску), переработка из нашего металла = выпуск × расценка подрядчика; изделия на металле подрядчика и работы без расценки оплачиваются через «Переразмещения» Комплектации — помесячно их нет, финрез по такой строке не считается."
         actions={<>
           <button className="btn-secondary" disabled={!rows.length} onClick={() => void downloadXlsx(workshopMatrix(rows), 'Финрез по цехам', 'MONOLITH-Finrez-po-cekham.xlsx')}><Download size={16} /> Excel</button>
           <button className="btn-secondary" disabled={!rows.length} onClick={() => downloadCsv(workshopMatrix(rows), 'MONOLITH-Finrez-po-cekham.csv')}><Download size={16} /> CSV</button>
@@ -1175,7 +1175,7 @@ function WorkshopOutputPage({ data, weights, acts }: { data: WorkspaceData; weig
               <td>{monthLabel(r.month)}</td><td><small>{r.workshop}</small></td><td><strong>{r.opp ?? '—'}</strong></td>
               <td className="tanks-cell">{r.customer || '—'}{r.issue && <small className="login-error">{r.issue}</small>}</td>
               <td {...src(actsSrc)}>{t3(r.outputT)}</td><td {...src(tkpSrc(r.b24))}>{money(r.pricePerT)}</td><td {...src(tkpSrc(r.b24))}>{money(r.revenue)}</td>
-              <td {...src(r.group === 'own' ? { kind: 'prod_own' } : { kind: 'prod_ext' })}>{money(r.metalRub)}{r.metalEstimated && r.metalRub !== null ? <small>оценка</small> : null}</td>
+              <td {...src(r.group === 'own' ? { kind: 'prod_own' } : { kind: 'prod_ext' })}>{money(r.metalRub)}{r.metalAllocated ? <small>распределено по месяцам</small> : null}</td>
               <td {...src(r.rate !== null ? { kind: 'rates' } : null)}>{r.rate === null ? '—' : num1(r.rate)}</td><td {...src(r.rate !== null ? { kind: 'rates' } : null)}>{money(r.processingRub)}</td>
               <td className={neg(r.result)}>{money(r.result)}</td><td className={neg(r.result)}>{pct(r.margin)}</td>
             </tr>
@@ -1183,15 +1183,37 @@ function WorkshopOutputPage({ data, weights, acts }: { data: WorkspaceData; weig
         </tbody>
       </table></div>
       {rows.length > 1500 && <p className="register-note"><small>Показаны первые 1500 строк; полностью — в выгрузке Excel.</small></p>}
-      <p className="register-note"><small>Источник выпуска: {acts.fileName}, лист «{acts.sheet}», {acts.actRows} актов. Выпуск — «Тоннаж брутто (для выручки)». «Металл — оценка»: выпуск × средняя сумма списания на тонну по шифру из «Выпуска сторонних цехов».</small></p>
+      <OutputCheck acts={acts} data={data} />
+      <p className="register-note"><small>Источник выпуска: {acts.fileName}, лист «{acts.sheet}», {acts.actRows} актов. Выпуск — «Тоннаж брутто (для выручки)». Металл — из тех же отчётов о выпуске, что и себестоимость сделок: завод — «Выпуск СЗ», сторонние — «Выпуск сторонних цехов».</small></p>
     </>
+  );
+}
+
+/** Сверка «Актов» с отчётами о выпуске (по которым считается себестоимость сделок). */
+function OutputCheck({ acts, data }: { acts: ActsFile; data: WorkspaceData }) {
+  const rows = useMemo(() => outputReconciliation(acts, data.prodOwn ?? [], data.prodExt ?? []), [acts, data]);
+  const own = rows.filter(r => r.scope === 'own').length;
+  return (
+    <details className="panel">
+      <summary><b>Сверка источников выпуска</b> — {rows.length ? `расхождений: ${rows.length} (завод ${own}, сторонние ${rows.length - own})` : 'расхождений нет'}</summary>
+      <p className="register-note"><small>«Акты» (выручка) против отчётов о выпуске, по которым считается себестоимость: завод — «Выпуск СЗ» по месяцу и шифру, сторонние — «Выпуск сторонних цехов» по шифру за весь период (в нём нет месяцев). Показаны расхождения больше 0,5 т и больше 3 % (Акты — брутто с упаковкой, небольшой плюс у них ожидаем); «Акты» до начала отчётов о выпуске не сравниваются.</small></p>
+      {rows.length > 0 && <div className="table-wrap"><table className="register-table">
+        <thead><tr><th>Источник</th><th>Месяц</th><th>Шифр ОПП</th><th>Акты, т</th><th>Отчёт о выпуске, т</th><th>Разница, т</th></tr></thead>
+        <tbody>{rows.slice(0, 300).map(r => (
+          <tr key={r.scope + (r.month ?? '') + r.opp}>
+            <td>{r.scope === 'own' ? 'Завод' : 'Сторонние'}</td><td>{r.month ? monthLabel(r.month) : 'весь период'}</td><td><strong>{r.opp}</strong></td>
+            <td>{t3(r.actsT)}</td><td>{t3(r.reportT)}</td><td className={neg(r.diffT)}>{t3(r.diffT)}</td>
+          </tr>
+        ))}</tbody>
+      </table></div>}
+    </details>
   );
 }
 
 /** Финрез по выпуску завода по месяцам (пока не загружен «Выпуск продукции»): цены из «Расчёта цен для выручки» × вес выпуска по шифрам. */
 function OwnOutputPage({ data, weights }: { data: WorkspaceData; weights: WeightsFile | null }) {
   const src = useSource();
-  const prices = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])])), [data, weights]);
+  const prices = useMemo(() => revenuePrices(data.tkp, data.reference ?? [], weights, factOutputKgByOpp(data)), [data, weights]);
   const all = useMemo(() => outputFinres(data.prodOwn ?? [], prices, data.rates, data.reference ?? []), [data, prices]);
   const months = useMemo(() => Array.from(new Set(all.map(r => r.month).filter((m): m is string => m !== null))).sort(), [all]);
   const [month, setMonth] = useState<string>('');
@@ -1302,7 +1324,7 @@ function NoTkpPage({ data, c }: { data: WorkspaceData; c: Consolidation }) {
   const src = useSource();
   const closed = useMemo(() => new Set(c.deals.map(d => d.b24).filter((b): b is number => b !== null)), [c]);
   const rows = useMemo(() => dealsWithoutTkp(data.reference ?? [], data.tkp,
-    outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])]), closed), [data, closed]);
+    factOutputKgByOpp(data), closed), [data, closed]);
   const name = (r: { client: string; product: string }) => [r.client, r.product].filter(Boolean).join(' — ');
   const matrix: Matrix = {
     head: ['Б24', 'Наименование сделки', 'РВС', 'ОПП', 'Выпуск, т', 'Закрыта в подразделениях', 'Лист справочника'],

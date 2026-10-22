@@ -1,3 +1,4 @@
+import type { ActsFile } from '../import/acts';
 import type { DepartmentFile } from '../import/department';
 import type { ProductionRow } from '../import/production';
 import type { Rates } from '../import/rates';
@@ -138,6 +139,8 @@ export type WorkspaceData = {
   /** dept deal name key → Б24 confirmed by a user. */
   dealAliases: Record<string, number>;
   contractorAliases: ContractorAliases;
+  /** «Выпуск продукции» (лист «Акты»): общий фактический выпуск по цехам, брутто для выручки. */
+  acts?: ActsFile | null;
 };
 
 export type Consolidation = {

@@ -39,6 +39,24 @@ export function outputKgByOpp(rows: ReadonlyArray<{ opp: number | null; outputT:
   return m;
 }
 
+/**
+ * Фактический выпуск по шифру для правила «выпуск больше планового веса → цена по выпуску», кг:
+ * при загруженном «Выпуске продукции» — тоннаж брутто для выручки по всем цехам (с упаковкой),
+ * иначе — выпуск из отчётов «Выпуск СЗ» и «Выпуск сторонних цехов».
+ */
+export function factOutputKgByOpp(data: {
+  acts?: { rows: ReadonlyArray<readonly [string, string, string, number | null, number]> } | null;
+  prodOwn: ReadonlyArray<{ opp: number | null; outputT: number }> | null;
+  prodExt: ReadonlyArray<{ opp: number | null; outputT: number }> | null;
+}): Map<number, number> {
+  if (data.acts?.rows.length) {
+    const m = new Map<number, number>();
+    for (const [, , , opp, kg] of data.acts.rows) if (opp !== null) m.set(opp, (m.get(opp) ?? 0) + kg);
+    return m;
+  }
+  return outputKgByOpp([...(data.prodOwn ?? []), ...(data.prodExt ?? [])]);
+}
+
 export function revenuePrices(
   tkp: readonly TkpFile[], reference: readonly ReferenceRow[], weights: WeightsFile | null, output: ReadonlyMap<number, number> = new Map(),
 ): PriceRow[] {

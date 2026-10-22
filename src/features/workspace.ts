@@ -68,6 +68,7 @@ export async function loadWorkspace(): Promise<{ data: WorkspaceData; uploads: U
     if (al.kind === 'contractor' && typeof al.to === 'string') data.contractorAliases[al.from] = al.to;
   }
   const uploads = raw.map(({ payload: _payload, ...meta }) => meta);
+  data.acts = acts;
   return { data, uploads, aliases, weights, acts, sources };
 }
 

@@ -521,15 +521,27 @@ describe('«Выпуск продукции» (лист «Акты») и фин�
     assert.equal(kvo.result, 30000);
     const opora = rows.find(r => r.workshop === 'Опора')!;
     assert.equal(opora.metalRub, 100000);
-    assert.equal(opora.metalEstimated, true);
+    assert.equal(opora.metalAllocated, true);
     assert.equal(opora.processingRub, 80000);
     assert.equal(opora.result, 20000);
     const promteh = rows.find(r => r.workshop === 'Промтех')!;
     assert.equal(promteh.revenue, 50000);
-    assert.equal(promteh.result, null);
+    assert.equal(promteh.result, null); // нет расценки подрядчика
     const t = workshopTotals(rows);
     assert.equal(t.outputT, 7);
     assert.equal(t.result, 30000 + 60000 + 20000);
+  });
+
+  it('правило цены берёт фактический выпуск из «Актов», сверка показывает расхождения', async () => {
+    const { factOutputKgByOpp } = await import('../src/domain/revenue-prices.ts');
+    const { outputReconciliation } = await import('../src/domain/output-workshops.ts');
+    const acts = await readActs(book, 'x.xlsx');
+    assert.equal(factOutputKgByOpp({ acts, prodOwn: [], prodExt: [] }).get(501), 7000);
+    assert.equal(factOutputKgByOpp({ acts: null, prodOwn: [{ opp: 501, outputT: 2 }], prodExt: null }).get(501), 2000);
+    const own = [{ opp: 501, order: 'з', month: '2026-01', workshop: 'СЗ', outputT: 4, metalT: 0, metalRub: 0, totalRub: 0 }];
+    const ext = [{ opp: 501, order: 'з', month: null, workshop: 'Склад готовой продукции', outputT: 9, metalT: 0, metalRub: 0, totalRub: 0 }];
+    const rows = outputReconciliation(acts, own, ext);
+    assert.deepEqual(rows.map(r => [r.scope, r.month, Math.round(r.diffT * 10) / 10]), [['ext', null, 2.5]]);
   });
 
   it('backend/acts.ts совпадает с src/import/acts.ts', async () => {
