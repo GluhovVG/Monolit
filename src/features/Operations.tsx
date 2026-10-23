@@ -27,9 +27,10 @@ import { closeChecklist } from '../domain/close-checklist';
 import { customerKey, summarize, type SummaryLine } from '../domain/summary';
 import { SourceProvider, useSource, type SourceRef } from './source-link';
 import { dealsWithoutTkp } from '../domain/no-tkp';
+import { DASH_METRICS, dashboardTable, dashboardYears, previousPeriod, rowsOf } from '../domain/year-dashboard';
 import { buildAiContext, loadWorkspace, packProduction, packReference, type Alias, type SheetSource, type UploadMeta } from './workspace';
 
-export type OperationsPage = 'uploads' | 'register' | 'prices' | 'output' | 'notkp' | 'production' | 'assistant';
+export type OperationsPage = 'uploads' | 'yeardash' | 'register' | 'prices' | 'output' | 'notkp' | 'production' | 'assistant';
 
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 const money = (n: number | null | undefined) => (n === null || n === undefined ? '—' : rub.format(n));
@@ -74,6 +75,7 @@ export function Operations({ page }: { page: OperationsPage }) {
   if (page === 'prices') return <PricesPage data={state.data} weights={state.weights} />;
   if (page === 'output') return <OutputPage data={state.data} weights={state.weights} acts={state.acts} />;
   if (page === 'notkp') return <NoTkpPage data={state.data} c={consolidation} />;
+  if (page === 'yeardash') return <YearDashboardPage c={consolidation} />;
   if (page === 'register') return <RegisterPage c={consolidation} data={state.data} onChanged={reload} />;
   if (page === 'production') return <ProductionPage c={consolidation} data={state.data} onChanged={reload} />;
   return <AssistantPage c={consolidation} />;
@@ -679,6 +681,7 @@ function RegisterPage({ c, data, onChanged }: { c: Consolidation; data: Workspac
         <div className="kpi-card"><span>Маржа факт</span><strong className={'kpi-value ' + (neg(t.profitFact) ?? '')}>{money(t.profitFact)}</strong><small>рентабельность {pct(ratio(t.profitFact, t.revenueFact))}</small></div>
         <div className="kpi-card"><span>Вес факт</span><strong className="kpi-value">{kg(t.weightFactKg)} кг</strong><small>план {kg(t.weightPlanKg)} кг</small></div>
       </div>
+      <RevenueGaps rows={visible} />
       <SummaryPanel rows={visible} />
       <div className="filters">
         <div className="search-box"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск: ОПП, Б24, заказчик, шифр бака" aria-label="Поиск" /></div>
@@ -1359,5 +1362,179 @@ function NoTkpPage({ data, c }: { data: WorkspaceData; c: Consolidation }) {
         </table>
       </div>
     </>
+  );
+}
+
+/* ───────────────────────── Дашборд года (из реестра; новый год — автоматически) ───────────────────────── */
+
+const fmtDash = (v: number | null, unit: 'rub' | 'kg' | 'rubkg') => (v === null ? '—' : unit === 'rubkg' ? num1(v) : rub.format(v));
+
+function YearDashboardPage({ c }: { c: Consolidation }) {
+  const years = useMemo(() => dashboardYears(c.rows), [c]);
+  const [yearSel, setYear] = useState('');
+  const year = yearSel || years[0] || '';
+  const table = useMemo(() => (year ? dashboardTable(c.rows, year) : null), [c, year]);
+  const [periodSel, setPeriod] = useState('');
+  const columns = table?.columns ?? [];
+  const current = columns.find(col => col.key === periodSel) ?? columns.find(col => col.kind === 'year');
+  if (!year || !table || !current) {
+    return (<>
+      <Heading eyebrow="ДАШБОРДЫ ПО ГОДАМ" title="Дашборд года" text="Дашборд строится из реестра сделок по месяцу закрытия. Загрузите файлы подразделений с закрытыми сделками — для каждого года появится свой дашборд." />
+      <div className="bottom-note">В реестре пока нет закрытых сделок.</div>
+    </>);
+  }
+  const rows = rowsOf(c.rows, current.months);
+  const prevRows = rowsOf(c.rows, previousPeriod(current.key));
+  const val = (key: string, list: readonly OppRow[]) => DASH_METRICS.find(m => m.key === key)!.value(list);
+  const kpi = (key: string) => ({ now: val(key, rows), before: prevRows.length ? val(key, prevRows) : null });
+  const revenue = kpi('revenue');
+  const cost = kpi('cost');
+  const profit = kpi('profit');
+  const weight = kpi('weight');
+  const marginNow = div0(profit.now, revenue.now);
+  const marginBefore = div0(profit.before, revenue.before);
+  const delta = (now: number | null, before: number | null) => (now === null || before === null || before === 0 ? null : (now - before) / Math.abs(before));
+  const prevLabel = current.kind === 'month' ? 'к прошлому месяцу' : current.kind === 'quarter' ? 'к прошлому кварталу' : 'к прошлому году';
+  const costParts = [
+    { label: 'МК', value: val('mkCost', rows) },
+    { label: 'Документация', value: val('docsFact', rows) },
+    { label: 'Комплектация', value: val('supplyFact', rows) },
+    { label: 'Доставка', value: val('deliveryFact', rows) },
+    { label: 'СМР', value: val('smrFact', rows) },
+    { label: 'БГ, штрафы', value: val('fines', rows) },
+  ];
+  const costTotal = costParts.reduce((s, p) => s + (p.value ?? 0), 0);
+  const blockers = rows.filter(r => r.issues.some(i => i.level === 'blocker'));
+  const warnings = rows.filter(r => r.issues.some(i => i.level === 'warning'));
+  const months = columns.filter(col => col.kind === 'month');
+  const chart = months.map(m => { const list = rowsOf(c.rows, m.months); return { m, revenue: val('revenue', list), profit: val('profit', list) }; });
+  const maxV = Math.max(1, ...chart.flatMap(x => [x.revenue ?? 0, Math.abs(x.profit ?? 0)]));
+  const matrix: Matrix = {
+    head: ['Показатель', ...columns.map(col => col.label)],
+    rows: table.lines.map(l => [(l.metric.sub ? '  в т.ч. ' : '') + l.metric.label, ...l.values]),
+    widths: [36, ...columns.map(() => 16)],
+  };
+  const Kpi = ({ label, now, before, fmt, inverse }: { label: string; now: number | null; before: number | null; fmt: (v: number | null) => string; inverse?: boolean }) => {
+    const d = delta(now, before);
+    const bad = d !== null && (inverse ? d > 0 : d < 0);
+    return (
+      <div className="kpi-card"><span>{label}</span><strong className="kpi-value">{fmt(now)}</strong>
+        <small className={bad ? 'negative' : undefined}>{d === null ? 'нет данных для сравнения' : `${d > 0 ? '+' : ''}${pct(d)} ${prevLabel}`}</small></div>
+    );
+  };
+  return (
+    <>
+      <Heading eyebrow="ДАШБОРДЫ ПО ГОДАМ" title={`Дашборд ${year}`}
+        text="Показатели закрытых сделок по месяцу закрытия — раскладка как в «Финрез.» 2025. Строится из реестра автоматически: для каждого года, где есть закрытые сделки, появляется свой дашборд."
+        actions={<>
+          <select value={year} onChange={e => { setYear(e.target.value); setPeriod(''); }} aria-label="Год">
+            {years.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <select value={current.key} onChange={e => setPeriod(e.target.value)} aria-label="Период">
+            {[...columns].reverse().map(col => <option key={col.key} value={col.key}>{col.kind === 'year' ? `Весь ${year} год` : col.label}</option>)}
+          </select>
+          <button className="btn-secondary" onClick={() => void downloadXlsx(matrix, `Финрез ${year}`, `MONOLITH-Finrez-${year}.xlsx`)}><Download size={16} /> Excel</button>
+          <button className="btn-secondary" onClick={() => window.print()}>PDF / печать</button>
+        </>} />
+      <div className="kpi-grid">
+        <Kpi label="Выручка" now={revenue.now} before={revenue.before} fmt={money} />
+        <Kpi label="Полная себестоимость" now={cost.now} before={cost.before} fmt={money} inverse />
+        <Kpi label="Маржа" now={profit.now} before={profit.before} fmt={money} />
+        <div className="kpi-card"><span>Рентабельность</span><strong className={'kpi-value ' + (neg(marginNow) ?? '')}>{pct(marginNow)}</strong>
+          <small>{marginNow !== null && marginBefore !== null ? `${marginNow - marginBefore >= 0 ? '+' : ''}${num1((marginNow - marginBefore) * 100)} п.п. ${prevLabel}` : 'нет данных для сравнения'}</small></div>
+        <Kpi label="Вес МК, кг" now={weight.now} before={weight.before} fmt={kg} />
+      </div>
+      {rows.some(r => r.revenueFact === null) && <div className="bottom-note">Выручка не рассчитана по {rows.filter(r => r.revenueFact === null).length} из {rows.length} строк (нет «Расчёта ТКП» по сделкам: {Array.from(new Set(rows.filter(r => r.revenueFact === null).map(r => r.b24 ?? '—'))).join(', ')}) — выручка, маржа и рентабельность за период неполные.</div>}
+      <section className="panel">
+        <div className="panel-heading"><div><h2>Структура себестоимости</h2><p>{current.kind === 'year' ? `${year} год` : current.label} · {rows.length} строк реестра</p></div></div>
+        <div className="table-wrap"><table className="register-table">
+          <thead><tr><th>Направление</th><th>Факт, ₽</th><th>Доля</th><th></th></tr></thead>
+          <tbody>{costParts.map(p => (
+            <tr key={p.label}><td><strong>{p.label}</strong></td><td>{money(p.value)}</td><td>{costTotal ? pct((p.value ?? 0) / costTotal) : '—'}</td>
+              <td style={{ width: '40%' }}><div className="mini-bar"><span style={{ width: costTotal ? `${Math.max(0, Math.min(100, ((p.value ?? 0) / costTotal) * 100))}%` : '0%' }} /></div></td></tr>
+          ))}</tbody>
+        </table></div>
+      </section>
+      {chart.length > 0 && (
+        <section className="panel">
+          <div className="panel-heading"><div><h2>Выручка и маржа по месяцам</h2><p>Месяц закрытия сделок, млн ₽</p></div></div>
+          <svg viewBox={`0 0 ${Math.max(360, chart.length * 64 + 40)} 220`} role="img" aria-label={`Выручка и маржа по месяцам ${year}`} style={{ width: '100%', maxHeight: 260 }}>
+            <line x1="30" x2={chart.length * 64 + 30} y1="180" y2="180" stroke="var(--line, #ccc)" />
+            {chart.map((x, i) => {
+              const h = (v: number | null) => (v === null ? 0 : (Math.abs(v) / maxV) * 150);
+              const x0 = 40 + i * 64;
+              return (
+                <g key={x.m.key}>
+                  <rect x={x0} y={180 - h(x.revenue)} width="22" height={h(x.revenue)} rx="3" fill="#3b6fd8"><title>{`${x.m.label}: выручка ${money(x.revenue)}`}</title></rect>
+                  <rect x={x0 + 24} y={180 - h(x.profit)} width="22" height={h(x.profit)} rx="3" fill={(x.profit ?? 0) < 0 ? '#d64545' : '#2e9e6a'}><title>{`${x.m.label}: маржа ${money(x.profit)}`}</title></rect>
+                  <text x={x0 + 23} y="198" textAnchor="middle" fontSize="11" fill="currentColor">{x.m.key.slice(5, 7)}</text>
+                  <text x={x0 + 11} y={174 - h(x.revenue)} textAnchor="middle" fontSize="9" fill="currentColor">{x.revenue === null ? '' : Math.round(x.revenue / 1e6)}</text>
+                </g>
+              );
+            })}
+            <rect x="30" y="205" width="10" height="10" fill="#3b6fd8" /><text x="44" y="214" fontSize="11" fill="currentColor">выручка</text>
+            <rect x="110" y="205" width="10" height="10" fill="#2e9e6a" /><text x="124" y="214" fontSize="11" fill="currentColor">маржа</text>
+          </svg>
+        </section>
+      )}
+      <section className="panel">
+        <div className="panel-heading"><div><h2>Финрез {year} по месяцам</h2><p>Как лист «Финрез.» 2025: месяцы закрытия, кварталы и итог года.</p></div></div>
+        <div className="table-wrap register-wrap"><table className="register-table">
+          <thead><tr><th>Показатель</th>{columns.map(col => <th key={col.key} className={col.kind !== 'month' ? 'total-col' : undefined}>{col.label}</th>)}</tr></thead>
+          <tbody>{table.lines.map(l => (
+            <tr key={l.metric.key} className={l.metric.sub ? undefined : 'total-row'}>
+              <td>{l.metric.sub ? <small>в т.ч. {l.metric.label}</small> : l.metric.label}</td>
+              {l.values.map((v, i) => <td key={columns[i].key} className={neg(l.metric.key.includes('rofit') || l.metric.key.includes('conomy') ? v : null)}>{fmtDash(v, l.metric.unit)}</td>)}
+            </tr>
+          ))}</tbody>
+        </table></div>
+      </section>
+      <section className="panel">
+        <div className="panel-heading"><div><h2>Готовность данных</h2><p>{current.kind === 'year' ? `${year} год` : current.label}</p></div></div>
+        <div className="kpi-grid">
+          <div className="kpi-card"><span>Строк реестра</span><strong className="kpi-value">{rows.length}</strong></div>
+          <div className="kpi-card"><span>С блокирующими замечаниями</span><strong className={'kpi-value ' + (blockers.length ? 'negative' : '')}>{blockers.length}</strong></div>
+          <div className="kpi-card"><span>С предупреждениями</span><strong className="kpi-value">{warnings.length}</strong></div>
+        </div>
+        {blockers.length > 0 && <div className="table-wrap"><table className="register-table">
+          <thead><tr><th>Шифр ОПП</th><th>Б24</th><th>Заказчик</th><th>Замечание</th></tr></thead>
+          <tbody>{blockers.slice(0, 10).map(r => (
+            <tr key={r.key}><td><strong>{r.opp ?? '—'}</strong></td><td>{r.b24 ?? '—'}</td><td>{r.customer}</td>
+              <td><small className="login-error">{r.issues.filter(i => i.level === 'blocker').map(i => i.message).join(' ')}</small></td></tr>
+          ))}</tbody>
+        </table></div>}
+      </section>
+    </>
+  );
+}
+
+const div0 = (a: number | null, b: number | null) => (a !== null && b ? a / b : null);
+
+/** Почему у строки нет выручки: выручка берётся только из «Расчёта ТКП» (стоимость МК) + бюджеты блоков. */
+export function revenueGapReason(r: OppRow): string {
+  if (r.b24 === null) return 'нет ссылки на сделку Б24';
+  if (r.issues.some(i => i.code === 'NOT_IN_REFERENCE')) return 'сделки нет в «Номерах заказов»';
+  if (r.issues.some(i => i.code === 'NO_TKP')) return 'не загружен «Расчёт ТКП»';
+  if (r.opp === null) return 'нет шифра ОПП';
+  if (!r.tkp.length) return 'позиции ТКП не сопоставлены с этим шифром';
+  return 'в ТКП нет стоимости МК';
+}
+
+function RevenueGaps({ rows }: { rows: OppRow[] }) {
+  const gaps = rows.filter(r => r.revenueFact === null);
+  if (!gaps.length) return null;
+  const byReason = new Map<string, OppRow[]>();
+  for (const r of gaps) byReason.set(revenueGapReason(r), [...(byReason.get(revenueGapReason(r)) ?? []), r]);
+  return (
+    <div className="bottom-note" role="status">
+      <AlertTriangle size={16} />
+      <span>
+        <b>Выручка не рассчитана по {gaps.length} из {rows.length} строк.</b> Выручка берётся из «Расчёта ТКП» (стоимость МК) + бюджеты блоков.{' '}
+        {Array.from(byReason.entries()).map(([reason, list]) => (
+          <span key={reason}>{reason}: {Array.from(new Set(list.map(r => r.b24 ?? r.customer))).join(', ')}. </span>
+        ))}
+        Список сделок без ТКП — в разделе «Сделки без ТКП».
+      </span>
+    </div>
   );
 }

@@ -549,3 +549,36 @@ describe('«Выпуск продукции» (лист «Акты») и фин�
     assert.equal(readFileSync(new URL('../backend/acts.ts', import.meta.url), 'utf8'), readFileSync(new URL('../src/import/acts.ts', import.meta.url), 'utf8'));
   });
 });
+
+describe('дашборд года', async () => {
+  const { dashboardYears, dashboardColumns, dashboardTable, previousPeriod } = await import('../src/domain/year-dashboard.ts');
+  const row = (period: string, revenue: number | null, cost: number) => ({
+    period, revenueFact: revenue, costFact: cost, profitFact: revenue === null ? null : revenue - cost, mkValueFact: revenue, mkProfitFact: null,
+    finesRub: null, weightFactKg: 1000, mk: null,
+    blocks: { docs: { plan: null, fact: null }, supply: { plan: 10, fact: 7 }, delivery: { plan: null, fact: null }, smr: { plan: null, fact: null } },
+  }) as never;
+  const rows = [row('2026-01', 100, 60), row('2026-02', 200, 150), row('2026-05', null, 50), row('2027-01', 300, 100)];
+
+  it('годы появляются автоматически из реестра', () => {
+    assert.deepEqual(dashboardYears(rows), ['2027', '2026']);
+  });
+
+  it('колонки: месяцы с данными, кварталы, итог года', () => {
+    assert.deepEqual(dashboardColumns(rows, '2026').map(c => c.key), ['2026-01', '2026-02', '2026-05', '2026-Q1', '2026-Q2', '2026']);
+  });
+
+  it('суммы по известным значениям, экономия = план − факт', () => {
+    const t = dashboardTable(rows, '2026');
+    const line = (k: string) => t.lines.find(l => l.metric.key === k)!.values;
+    assert.deepEqual(line('revenue'), [100, 200, null, 300, null, 300]);
+    assert.equal(line('cost').at(-1), 260);
+    assert.equal(line('supplyEconomy').at(-1), 9);
+    assert.equal(line('mkPerKg').at(0), 0.1);
+  });
+
+  it('предыдущий период', () => {
+    assert.deepEqual(previousPeriod('2026-01'), ['2025-12']);
+    assert.deepEqual(previousPeriod('2026-Q1'), ['2025-10', '2025-11', '2025-12']);
+    assert.equal(previousPeriod('2026').length, 12);
+  });
+});

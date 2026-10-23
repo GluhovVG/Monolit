@@ -1762,3 +1762,4 @@ td small {
 .src-cell:hover { background: rgba(127, 127, 127, 0.1); }
 .row-clickable { cursor: pointer; }
 .row-clickable:hover td { background: rgba(127, 127, 127, 0.08); }
+.total-col { background: rgba(127, 127, 127, 0.06); }

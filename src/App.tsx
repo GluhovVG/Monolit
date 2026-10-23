@@ -42,7 +42,7 @@ const money = (n: number) =>
 const pct = (n: number) =>
   new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(n) + '%';
 const periodOptions = periods;
-const OPERATIONS_PAGES: OperationsPage[] = ['uploads', 'register', 'prices', 'output', 'notkp', 'production', 'assistant'];
+const OPERATIONS_PAGES: OperationsPage[] = ['uploads', 'yeardash', 'register', 'prices', 'output', 'notkp', 'production', 'assistant'];
 /** Russian plural: plural(5, ['сделка', 'сделки', 'сделок']) → 'сделок'. */
 const plural = (n: number, forms: [string, string, string]) => {
   const mod10 = n % 10;
@@ -340,13 +340,14 @@ function Workspace({
   };
   const nav = [
     { id: 'uploads', label: 'Загрузка файлов', icon: Upload },
+    { id: 'yeardash', label: 'Дашборды по годам', icon: LayoutDashboard },
     { id: 'register', label: 'Реестр сделок', icon: Table2 },
     { id: 'prices', label: 'Расчёт цен для выручки', icon: Calculator },
     { id: 'output', label: 'Финрез по выпуску', icon: TrendingUp },
     { id: 'notkp', label: 'Сделки без ТКП', icon: FileWarning },
     { id: 'production', label: 'Производство МК', icon: Factory },
     { id: 'assistant', label: 'ИИ-помощник', icon: Sparkles },
-    { id: 'dashboard', label: 'Дашборд 2025', icon: LayoutDashboard },
+    { id: 'dashboard', label: 'Дашборд 2025 (XLSX)', icon: LayoutDashboard },
     { id: 'deals', label: 'Учёт 2025', icon: FileSpreadsheet },
     { id: 'checks', label: 'Проверки 2025', icon: BrainCircuit },
     { id: 'regulation', label: 'Положение', icon: FileText },
