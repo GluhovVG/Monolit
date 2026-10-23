@@ -776,10 +776,14 @@ function ProductionPage({ c, data, onChanged }: { c: Consolidation; data: Worksp
       <Heading eyebrow="СЕБЕСТОИМОСТЬ МК" title="Производство МК"
         text="По каждому шифру ОПП: завод — списание «Сумма всего с НДС» + выпуск (т × 1000) × коэффициент месяца; сторонние — списание + выпуск × расценка подрядчика, без расценки — «Переразмещения (частичные)» из Комплектации." />
       <div className="kpi-grid">
-        <div className="kpi-card"><span>Выпуск</span><strong className="kpi-value">{kg(sum(p => p.mk.outputKg))} кг</strong></div>
-        <div className="kpi-card"><span>Завод (СЗ)</span><strong className="kpi-value">{money(sum(p => p.mk.own.totalRub))}</strong></div>
-        <div className="kpi-card"><span>Сторонние</span><strong className="kpi-value">{money(sum(p => p.mk.ext.totalRub))}</strong></div>
-        <div className="kpi-card"><span>Себестоимость МК</span><strong className="kpi-value">{money(sum(p => p.mk.costRub))}</strong></div>
+        <div className="kpi-card"><span>Выпуск МК, всего</span><strong className="kpi-value">{kg(sum(p => p.mk.outputKg))} кг</strong>
+          <small>завод {kg(sum(p => p.mk.own.outputKg))} кг · сторонние {kg(sum(p => p.mk.ext.outputKg))} кг</small></div>
+        <div className="kpi-card"><span>Себестоимость МК завода (СЗ), ₽ с НДС</span><strong className="kpi-value">{money(sum(p => p.mk.own.totalRub))} ₽</strong>
+          <small>металл {money(sum(p => p.mk.own.writeOffRub))} ₽ + переработка {money(sum(p => p.mk.own.workRub))} ₽</small></div>
+        <div className="kpi-card"><span>Себестоимость МК сторонних цехов, ₽ с НДС</span><strong className="kpi-value">{money(sum(p => p.mk.ext.totalRub))} ₽</strong>
+          <small>металл {money(sum(p => p.mk.ext.writeOffRub))} ₽ + работа {money(sum(p => p.mk.ext.workRub))} ₽ + переразмещения {money(sum(p => p.mk.ext.reallocationRub))} ₽</small></div>
+        <div className="kpi-card"><span>Себестоимость МК всего, ₽ с НДС</span><strong className="kpi-value">{money(sum(p => p.mk.costRub))} ₽</strong>
+          <small>{(() => { const k = sum(p => p.mk.outputKg); return k ? `${num1(sum(p => p.mk.costRub) / k)} ₽/кг выпуска` : ''; })()}</small></div>
       </div>
       {(c.globalIssues.length > 0 || c.unfinishedOpps.length > 0) && (
         <section className="panel"><div className="panel-heading"><div><h2>Замечания по расчёту</h2></div></div>
