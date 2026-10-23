@@ -1391,7 +1391,7 @@ function NoTkpPage({ data, c }: { data: WorkspaceData; c: Consolidation }) {
       </div>
       {shown.length > 0 && (
         <section className="panel">
-          <div className="panel-heading"><div><h2>Текст запроса</h2><p>Для письма или задачи в Б24 — можно отредактировать перед отправкой.</p></div></div>
+          <div className="panel-heading"><div><h2>Текст запроса</h2><p>Для письма или задачи в Б24: скопируйте и при необходимости дополните.</p></div></div>
           <textarea readOnly value={text} rows={Math.min(24, text.split('\n').length + 1)} style={{ width: '100%', fontFamily: 'inherit' }} aria-label="Текст запроса ТКП" />
         </section>
       )}
