@@ -601,3 +601,15 @@ describe('запрос недостающих ТКП', async () => {
     assert.match(text, /Уточнить «Расчёт ТКП»[\s\S]*Б24 1002/);
   });
 });
+
+describe('выпуск за период', async () => {
+  const { outputKgByOppInPeriod, outputMonths } = await import('../src/domain/revenue-prices.ts');
+  const acts = { periods: ['2025-12', '2026-01', '2026-02'], rows: [['2025-12', 'СЗ', 'КВО', 501, 100], ['2026-01', 'СЗ', 'КВО', 501, 200], ['2026-02', 'Сторонние', 'Опора', 502, 50]] as Array<[string, string, string, number | null, number]> };
+  it('по «Актам», если загружены, иначе по «Выпуску СЗ»', () => {
+    const m = outputKgByOppInPeriod({ acts, prodOwn: null }, '2026-01', '2026-12');
+    assert.deepEqual([...m], [[501, 200], [502, 50]]);
+    const own = outputKgByOppInPeriod({ acts: null, prodOwn: [{ opp: 501, outputT: 2, month: '2025-12' }, { opp: 501, outputT: 3, month: '2026-01' }] }, '2026-01', null);
+    assert.equal(own.get(501), 3000);
+    assert.deepEqual(outputMonths({ acts, prodOwn: null }), ['2025-12', '2026-01', '2026-02']);
+  });
+});

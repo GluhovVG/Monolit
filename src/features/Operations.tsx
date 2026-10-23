@@ -6,7 +6,7 @@ import {
   type Consolidation, type DealIssue, type OppMk, type OppRow, type ProductionOpp, type WorkspaceData,
 } from '../domain/consolidate';
 import type { MkLine } from '../domain/mk-production';
-import { factOutputKgByOpp, revenuePrices, type PriceRow } from '../domain/revenue-prices';
+import { factOutputKgByOpp, outputKgByOppInPeriod, outputMonths, revenuePrices, type PriceRow } from '../domain/revenue-prices';
 import { externalReference, outputFinres, outputTotals, type OutputRow } from '../domain/output-finres';
 import {
   blockTotals, departmentFromFileName, detectDepartmentMapping, extractDepartmentDeals, sanitizeMapping, sheetPreview,
@@ -1329,13 +1329,32 @@ function ExternalReference({ data, prices }: { data: WorkspaceData; prices: Pric
 
 function NoTkpPage({ data, c }: { data: WorkspaceData; c: Consolidation }) {
   const src = useSource();
-  const closed = useMemo(() => new Set(c.deals.map(d => d.b24).filter((b): b is number => b !== null)), [c]);
-  const noTkp = useMemo(() => dealsWithoutTkp(data.reference ?? [], data.tkp, factOutputKgByOpp(data), closed), [data, closed]);
-  const rows = useMemo(() => tkpRequest(noTkp, c.deals, new Set(data.tkp.map(t => t.b24).filter((b): b is number => b !== null))), [noTkp, c, data]);
+  const months = useMemo(() => Array.from(new Set([...outputMonths(data), ...c.periods])).sort(), [data, c]);
+  const last = months[months.length - 1] ?? '';
+  const shift = (m: string, n: number) => { const d = new Date(Date.UTC(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1 + n, 1)); return d.toISOString().slice(0, 7); };
+  const presets = last ? [
+    { key: 'year', label: `${last.slice(0, 4)} год`, from: `${last.slice(0, 4)}-01`, to: last },
+    { key: '12m', label: '12 месяцев', from: shift(last, -11), to: last },
+    { key: '3m', label: '3 месяца', from: shift(last, -2), to: last },
+    { key: 'all', label: 'Весь период', from: '', to: '' },
+  ] : [];
+  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
+  const from = range ? range.from : presets[0]?.from ?? '';
+  const to = range ? range.to : presets[0]?.to ?? '';
+  const inRange = (m: string) => (!from || m >= from) && (!to || m <= to);
+  // Закрытые сделки — закрытые в выбранном периоде; выпуск — за период (Акты, иначе Выпуск СЗ).
+  const dealsInRange = useMemo(() => c.deals.map(d => ({ ...d, rows: d.rows.filter(r => r.period !== null && inRange(r.period)) })).filter(d => d.rows.length),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [c, from, to]);
+  const closed = useMemo(() => new Set(dealsInRange.map(d => d.b24).filter((b): b is number => b !== null)), [dealsInRange]);
+  const output = useMemo(() => (from || to ? outputKgByOppInPeriod(data, from || null, to || null) : factOutputKgByOpp(data)), [data, from, to]);
+  const noTkp = useMemo(() => dealsWithoutTkp(data.reference ?? [], data.tkp, output, closed), [data, output, closed]);
+  const rows = useMemo(() => tkpRequest(noTkp, dealsInRange, new Set(data.tkp.map(t => t.b24).filter((b): b is number => b !== null))), [noTkp, dealsInRange, data]);
   const [onlyUrgent, setOnlyUrgent] = useState(false);
   const [copied, setCopied] = useState('');
   const shown = rows.filter(r => !onlyUrgent || r.priority === 1);
-  const text = tkpRequestText(shown);
+  const periodText = from || to ? `Период: ${from ? monthLabel(from) : 'начало'} — ${to ? monthLabel(to) : 'сейчас'}.` : 'Период: весь.';
+  const text = shown.length ? `${periodText}\n${tkpRequestText(shown)}` : '';
   const matrix: Matrix = {
     head: ['Приоритет', 'Что нужно', 'Б24', 'Наименование сделки', 'РВС', 'ОПП', 'Закрыта (месяц)', 'Выпуск, т', 'Для чего нужен ТКП'],
     rows: shown.map(r => [r.priority, r.kind === 'missing' ? 'предоставить ТКП' : 'уточнить ТКП', r.b24, r.name, r.tanks.join(', '), r.opps.join(', '),
@@ -1369,6 +1388,15 @@ function NoTkpPage({ data, c }: { data: WorkspaceData; c: Consolidation }) {
         <div className="kpi-card"><span>Уточнить ТКП</span><strong className="kpi-value">{rows.filter(r => r.kind === 'unmatched').length}</strong><small>позиции не сопоставлены</small></div>
         <div className="kpi-card"><span>Выпуск без цены</span><strong className="kpi-value">{t3(rows.reduce((s, r) => s + r.outputT, 0))} т</strong></div>
       </div>
+      <div className="filters">
+        <span>Период выпуска и закрытия:</span>
+        {presets.map(p => (
+          <button key={p.key} className={from === p.from && to === p.to ? 'btn-primary' : 'btn-secondary'} onClick={() => setRange({ from: p.from, to: p.to })}>{p.label}</button>
+        ))}
+        <label>с <input type="month" value={from} min={months[0]} max={last} onChange={e => setRange({ from: e.target.value, to })} aria-label="Период с" /></label>
+        <label>по <input type="month" value={to} min={months[0]} max={last} onChange={e => setRange({ from, to: e.target.value })} aria-label="Период по" /></label>
+      </div>
+      {!data.acts && (from || to) && <div className="bottom-note">«Выпуск продукции» (Акты) не загружен: выпуск за период — только завод по «Выпуску СЗ» (в отчёте сторонних цехов нет месяцев).</div>}
       <div className="filters">
         <label className="check-label"><input type="checkbox" checked={onlyUrgent} onChange={e => setOnlyUrgent(e.target.checked)} /> Только срочные (закрытые сделки)</label>
         <span className="result-count">{shown.length} сделок</span>

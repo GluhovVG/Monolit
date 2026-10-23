@@ -112,3 +112,30 @@ export function revenuePrices(
   }
   return Array.from(rows.values()).sort((a, b) => (a.opp ?? 1e9) - (b.opp ?? 1e9) || (a.b24 ?? 0) - (b.b24 ?? 0));
 }
+
+/**
+ * Выпуск по шифру за период (месяцы from..to включительно, 'YYYY-MM'), кг — для отчётов с фильтром периода.
+ * Источник с месяцами: «Акты» (все цеха), иначе «Выпуск СЗ» (только завод: у сторонних в отчёте нет месяцев).
+ */
+export function outputKgByOppInPeriod(data: {
+  acts?: { rows: ReadonlyArray<readonly [string, string, string, number | null, number]> } | null;
+  prodOwn: ReadonlyArray<{ opp: number | null; outputT: number; month: string | null }> | null;
+}, from: string | null, to: string | null): Map<number, number> {
+  const inRange = (m: string | null) => m !== null && (!from || m >= from) && (!to || m <= to);
+  const out = new Map<number, number>();
+  if (data.acts?.rows.length) {
+    for (const [month, , , opp, kg] of data.acts.rows) if (opp !== null && inRange(month)) out.set(opp, (out.get(opp) ?? 0) + kg);
+    return out;
+  }
+  for (const r of data.prodOwn ?? []) if (r.opp !== null && inRange(r.month)) out.set(r.opp, (out.get(r.opp) ?? 0) + r.outputT * 1000);
+  return out;
+}
+
+/** Месяцы, за которые есть выпуск с датой (для выбора периода). */
+export function outputMonths(data: {
+  acts?: { periods: readonly string[] } | null;
+  prodOwn: ReadonlyArray<{ month: string | null }> | null;
+}): string[] {
+  if (data.acts?.periods.length) return [...data.acts.periods].sort();
+  return Array.from(new Set((data.prodOwn ?? []).map(r => r.month).filter((m): m is string => Boolean(m)))).sort();
+}
