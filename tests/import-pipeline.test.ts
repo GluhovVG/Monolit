@@ -582,3 +582,22 @@ describe('дашборд года', async () => {
     assert.equal(previousPeriod('2026').length, 12);
   });
 });
+
+describe('запрос недостающих ТКП', async () => {
+  const { tkpRequest, tkpRequestText } = await import('../src/domain/no-tkp.ts');
+  const noTkp = [
+    { b24: 1001, client: 'ООО Альфа', product: 'РВС 1000', tanks: ['РВС-1000/1'], opps: [501], outputT: 12, closed: true, sheets: ['Текущие'] },
+    { b24: 1003, client: 'ООО Гамма', product: '', tanks: [], opps: [503], outputT: 40, closed: false, sheets: ['Текущие'] },
+  ];
+  const deal = (b24: number, period: string, codes: string[] = []) => ({ b24, customer: 'ООО Бета', product: 'РВС 500', rows: [{ period, opp: 502, tanks: ['РВС-500/1'], issues: codes.map(code => ({ code, message: '' })) }] });
+  const deals = [deal(1001, '2026-09'), deal(1002, '2026-08', ['TKP_NO_OPP']), deal(1004, '2026-09')];
+
+  it('сначала закрытые без ТКП, затем с выпуском, отдельно — уточнить ТКП', () => {
+    const rows = tkpRequest(noTkp, deals, new Set([1002]));
+    assert.deepEqual(rows.map(r => [r.b24, r.kind, r.priority]), [[1001, 'missing', 1], [1004, 'missing', 1], [1003, 'missing', 2], [1002, 'unmatched', 1]]);
+    assert.match(rows[0].need, /сентябре 2026/);
+    const text = tkpRequestText(rows);
+    assert.match(text, /Прошу предоставить «Расчёт ТКП»/);
+    assert.match(text, /Уточнить «Расчёт ТКП»[\s\S]*Б24 1002/);
+  });
+});

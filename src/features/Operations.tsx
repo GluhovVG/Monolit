@@ -26,7 +26,7 @@ import { downloadCsv, downloadXlsx, type Matrix } from './table-export';
 import { closeChecklist } from '../domain/close-checklist';
 import { customerKey, summarize, type SummaryLine } from '../domain/summary';
 import { SourceProvider, useSource, type SourceRef } from './source-link';
-import { dealsWithoutTkp } from '../domain/no-tkp';
+import { dealsWithoutTkp, monthIn, tkpRequest, tkpRequestText } from '../domain/no-tkp';
 import { DASH_METRICS, dashboardTable, dashboardYears, previousPeriod, rowsOf } from '../domain/year-dashboard';
 import { buildAiContext, loadWorkspace, packProduction, packReference, type Alias, type SheetSource, type UploadMeta } from './workspace';
 
@@ -1330,41 +1330,71 @@ function ExternalReference({ data, prices }: { data: WorkspaceData; prices: Pric
 function NoTkpPage({ data, c }: { data: WorkspaceData; c: Consolidation }) {
   const src = useSource();
   const closed = useMemo(() => new Set(c.deals.map(d => d.b24).filter((b): b is number => b !== null)), [c]);
-  const rows = useMemo(() => dealsWithoutTkp(data.reference ?? [], data.tkp,
-    factOutputKgByOpp(data), closed), [data, closed]);
-  const name = (r: { client: string; product: string }) => [r.client, r.product].filter(Boolean).join(' — ');
+  const noTkp = useMemo(() => dealsWithoutTkp(data.reference ?? [], data.tkp, factOutputKgByOpp(data), closed), [data, closed]);
+  const rows = useMemo(() => tkpRequest(noTkp, c.deals, new Set(data.tkp.map(t => t.b24).filter((b): b is number => b !== null))), [noTkp, c, data]);
+  const [onlyUrgent, setOnlyUrgent] = useState(false);
+  const [copied, setCopied] = useState('');
+  const shown = rows.filter(r => !onlyUrgent || r.priority === 1);
+  const text = tkpRequestText(shown);
   const matrix: Matrix = {
-    head: ['Б24', 'Наименование сделки', 'РВС', 'ОПП', 'Выпуск, т', 'Закрыта в подразделениях', 'Лист справочника'],
-    rows: rows.map(r => [r.b24, name(r), r.tanks.join(', '), r.opps.join(', '), r.outputT, r.closed ? 'да' : 'нет', r.sheets.join(', ')]),
+    head: ['Приоритет', 'Что нужно', 'Б24', 'Наименование сделки', 'РВС', 'ОПП', 'Закрыта (месяц)', 'Выпуск, т', 'Для чего нужен ТКП'],
+    rows: shown.map(r => [r.priority, r.kind === 'missing' ? 'предоставить ТКП' : 'уточнить ТКП', r.b24, r.name, r.tanks.join(', '), r.opps.join(', '),
+      r.closedMonths.map(monthIn).join(', '), r.outputT, r.need]),
+    widths: [10, 18, 8, 40, 40, 12, 18, 10, 50],
   };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied('Текст запроса скопирован.');
+    } catch {
+      setCopied('Не удалось скопировать — выделите текст ниже вручную.');
+    }
+  };
+  const mail = `mailto:?subject=${encodeURIComponent('Запрос «Расчётов ТКП» по сделкам')}&body=${encodeURIComponent(text.slice(0, 1800))}`;
   return (
     <>
-      <Heading eyebrow="КОНТРОЛЬ ИСТОЧНИКОВ" title="Сделки без ТКП"
-        text="Сделки из «Номеров заказов», по которым есть выпуск МК или которые закрыты в файлах подразделений, но не загружен «Расчёт ТКП». Без ТКП нет цены за тонну, плана МК и выручки по выпуску."
+      <Heading eyebrow="ЗАПРОС ТКП" title="Сделки без ТКП"
+        text="Отчёт о недостающих «Расчётах ТКП» для запроса: без ТКП в реестре нет выручки, а в финрезе по выпуску — цены за тонну. Сначала — закрытые сделки, затем сделки с выпуском; отдельно — загруженные ТКП, позиции которых не сопоставлены с баками."
         actions={<>
-          <button className="btn-secondary" disabled={!rows.length} onClick={() => void downloadXlsx(matrix, 'Сделки без ТКП', 'MONOLITH-Sdelki-bez-TKP.xlsx')}><Download size={16} /> Excel</button>
-          <button className="btn-secondary" disabled={!rows.length} onClick={() => downloadCsv(matrix, 'MONOLITH-Sdelki-bez-TKP.csv')}><Download size={16} /> CSV</button>
+          <button className="btn-primary" disabled={!shown.length} onClick={() => void copy()}>Скопировать запрос</button>
+          <a className="btn-secondary" href={mail} aria-disabled={!shown.length}>Письмо</a>
+          <button className="btn-secondary" disabled={!shown.length} onClick={() => void downloadXlsx(matrix, 'Запрос ТКП', 'MONOLITH-Zapros-TKP.xlsx')}><Download size={16} /> Excel</button>
+          <button className="btn-secondary" disabled={!shown.length} onClick={() => downloadCsv(matrix, 'MONOLITH-Zapros-TKP.csv')}><Download size={16} /> CSV</button>
         </>} />
       {!data.reference?.length && <div className="bottom-note">Загрузите «Номера заказов».</div>}
+      {copied && <div className="bottom-note" role="status">{copied}</div>}
       <div className="kpi-grid">
-        <div className="kpi-card"><span>Сделок без ТКП</span><strong className="kpi-value">{rows.length}</strong></div>
-        <div className="kpi-card"><span>Из них закрыты</span><strong className="kpi-value">{rows.filter(r => r.closed).length}</strong></div>
-        <div className="kpi-card"><span>Выпуск по ним</span><strong className="kpi-value">{t3(rows.reduce((s, r) => s + r.outputT, 0))} т</strong></div>
+        <div className="kpi-card"><span>Запросить ТКП</span><strong className="kpi-value">{rows.filter(r => r.kind === 'missing').length}</strong><small>сделок</small></div>
+        <div className="kpi-card"><span>Срочно: закрыты без ТКП</span><strong className={'kpi-value ' + (rows.some(r => r.priority === 1 && r.kind === 'missing') ? 'negative' : '')}>{rows.filter(r => r.priority === 1 && r.kind === 'missing').length}</strong><small>в реестре нет выручки</small></div>
+        <div className="kpi-card"><span>Уточнить ТКП</span><strong className="kpi-value">{rows.filter(r => r.kind === 'unmatched').length}</strong><small>позиции не сопоставлены</small></div>
+        <div className="kpi-card"><span>Выпуск без цены</span><strong className="kpi-value">{t3(rows.reduce((s, r) => s + r.outputT, 0))} т</strong></div>
+      </div>
+      <div className="filters">
+        <label className="check-label"><input type="checkbox" checked={onlyUrgent} onChange={e => setOnlyUrgent(e.target.checked)} /> Только срочные (закрытые сделки)</label>
+        <span className="result-count">{shown.length} сделок</span>
       </div>
       <div className="table-wrap">
-        <table>
-          <thead><tr><th>Б24</th><th>Наименование сделки</th><th>РВС</th><th>ОПП</th><th>Выпуск, т</th><th>Закрыта</th><th>Лист</th></tr></thead>
+        <table className="register-table">
+          <thead><tr><th>Приор.</th><th>Что нужно</th><th>Б24</th><th>Наименование сделки</th><th>РВС</th><th>ОПП</th><th>Закрыта</th><th>Выпуск, т</th><th>Для чего нужен ТКП</th></tr></thead>
           <tbody>
-            {rows.map(r => (
+            {shown.map(r => (
               <tr key={r.b24} {...src({ kind: 'reference' })}>
-                <td>{r.b24}</td><td>{name(r) || '—'}</td><td>{r.tanks.join(', ') || '—'}</td><td>{r.opps.join(', ') || '—'}</td>
-                <td>{t3(r.outputT)}</td><td>{r.closed ? 'да' : '—'}</td><td>{r.sheets.join(', ')}</td>
+                <td className={r.priority === 1 ? 'negative' : undefined}>{r.priority === 1 ? 'срочно' : 'обычный'}</td>
+                <td>{r.kind === 'missing' ? 'предоставить' : 'уточнить'}</td>
+                <td><strong>{r.b24}</strong></td><td>{r.name || '—'}</td><td className="tanks-cell"><small>{r.tanks.join(', ') || '—'}</small></td>
+                <td>{r.opps.join(', ') || '—'}</td><td>{r.closedMonths.map(monthLabel).join(', ') || '—'}</td><td>{t3(r.outputT)}</td><td><small>{r.need}</small></td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={7}>Нет сделок без ТКП.</td></tr>}
+            {!shown.length && <tr><td colSpan={9}>Все нужные «Расчёты ТКП» загружены.</td></tr>}
           </tbody>
         </table>
       </div>
+      {shown.length > 0 && (
+        <section className="panel">
+          <div className="panel-heading"><div><h2>Текст запроса</h2><p>Для письма или задачи в Б24 — можно отредактировать перед отправкой.</p></div></div>
+          <textarea readOnly value={text} rows={Math.min(24, text.split('\n').length + 1)} style={{ width: '100%', fontFamily: 'inherit' }} aria-label="Текст запроса ТКП" />
+        </section>
+      )}
     </>
   );
 }
